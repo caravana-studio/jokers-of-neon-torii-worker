@@ -1,0 +1,152 @@
+# Jokers of Neon - Event Listener
+
+Bot para escuchar eventos `DailyMissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
+
+## Características
+
+- ✅ Escucha eventos en tiempo real desde Torii
+- ✅ Procesa eventos `DailyMissionCompletedEvent`
+- ✅ Modo solo lectura (sin ejecutar transacciones)
+- ✅ Modo ejecución (ejecuta transacciones en Starknet)
+- ✅ Basado en el SDK oficial de Dojo.js
+
+## Instalación
+
+```bash
+cd event-listener
+bun install
+```
+
+## Configuración
+
+1. Copia el archivo de ejemplo de variables de entorno:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edita `.env` con tu configuración:
+
+```env
+# Requerido
+TORII_URL=https://api.cartridge.gg/x/jokers-pre-season/torii
+RELAY_URL=https://api.cartridge.gg/x/jokers-pre-season/torii
+WORLD_ADDRESS=0x...
+
+# Opcional (para ejecutar transacciones)
+STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
+STARKNET_PRIVATE_KEY=0x...
+STARKNET_ADDRESS=0x...
+STARKNET_CONTRACT_ADDRESS=0x...
+```
+
+## Uso
+
+### Modo Desarrollo
+
+```bash
+bun run dev
+```
+
+### Modo Producción
+
+```bash
+# Compilar
+bun run build
+
+# Ejecutar
+bun run start
+```
+
+## Modos de Operación
+
+### Modo Solo Lectura
+
+Si **NO** configuras `STARKNET_PRIVATE_KEY`, el bot funcionará en modo solo lectura:
+- Escucha eventos en tiempo real
+- Muestra los eventos en la consola
+- **NO ejecuta transacciones** en Starknet
+
+### Modo Ejecución
+
+Si configuras `STARKNET_PRIVATE_KEY` y las demás variables de Starknet:
+- Escucha eventos en tiempo real
+- Muestra los eventos en la consola
+- **Ejecuta transacciones** en Starknet para procesar recompensas
+
+## Estructura del Proyecto
+
+```
+event-listener/
+├── src/
+│   ├── main.ts              # Worker principal (basado en ejemplo de dojo.js)
+│   ├── env.ts               # Configuración de variables de entorno
+│   ├── dojoConfig.ts        # Configuración de Dojo
+│   ├── eventListener.ts     # Lógica legacy de escucha de eventos
+│   ├── starknetExecutor.ts  # Ejecutor de transacciones en Starknet
+│   └── schema.ts            # Schemas generados (placeholder)
+├── package.json
+├── tsconfig.json
+├── .env.example
+└── README.md
+```
+
+## Generar Schemas TypeScript (Opcional)
+
+Si tienes acceso al proyecto de Cairo/Dojo, puedes generar los schemas TypeScript:
+
+1. Ve al proyecto de Dojo de Jokers of Neon
+2. Ejecuta:
+   ```bash
+   sozo build
+   dojo-bindgen typescript --outputPath ../event-listener/typescript
+   ```
+3. Esto generará los schemas en la carpeta `typescript/`
+
+**Nota**: El worker funciona sin los schemas generados, pero tenerlos proporciona mejor type safety.
+
+## Logs de Ejemplo
+
+```
+🎮 Jokers of Neon - Event Listener
+════════════════════════════════════════════════════════════
+Torii URL:    https://api.cartridge.gg/x/jokers-pre-season/torii
+Relay URL:    https://api.cartridge.gg/x/jokers-pre-season/torii
+World:        0x...
+════════════════════════════════════════════════════════════
+
+🔌 Inicializando SDK de Dojo...
+
+✅ SDK inicializado correctamente
+
+🚀 Configurando listeners de eventos...
+
+📊 Eventos históricos iniciales: 5
+
+📜 Eventos históricos encontrados:
+   1. Player: 0x123..., Mission: 0x1
+   2. Player: 0x456..., Mission: 0x2
+
+📡 Suscribiéndose a eventos en tiempo real...
+
+✅ Listener configurado exitosamente
+
+👂 Escuchando eventos DailyMissionCompletedEvent...
+
+Presiona Ctrl+C para detener
+```
+
+## Troubleshooting
+
+### Error: "Faltan variables de entorno requeridas"
+Asegúrate de configurar `TORII_URL` y `WORLD_ADDRESS` en tu archivo `.env`.
+
+### El bot no escucha eventos
+- Verifica que `TORII_URL` sea correcto
+- Verifica que `WORLD_ADDRESS` sea la dirección correcta del contrato World
+- Asegúrate de que el modelo de evento esté correctamente nombrado en el código
+
+## Referencias
+
+- [Dojo.js Documentation](https://book.dojoengine.org/toolchain/dojo-js)
+- [Example Node Worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker)
+- [Torii Documentation](https://book.dojoengine.org/toolchain/torii)
