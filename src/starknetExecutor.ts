@@ -30,9 +30,9 @@ export async function executeStarknetTransaction(params: {
 
   // Preparar el call
   const call: Call = {
-    contractAddress: "0x58c91a5582685762eb424af825709aa5e8d4f5158ffd773edda1e75907b6d1a",
-    entrypoint: "add_daily_mission_xp",
-    calldata: ["0x00f9b0f80653b11bb810614bb6a9b8f1f9ff61e64ecadb1599a3eeb3fa6492d7", "1"]
+    contractAddress: params.contractAddress,
+    entrypoint: params.entrypoint,
+    calldata: params.calldata
   };
 
   console.log("call: ", call);
