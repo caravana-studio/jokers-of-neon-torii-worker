@@ -1,6 +1,6 @@
 import { Account, Call, RpcProvider } from 'starknet';
 import { env } from './env.js';
-import type { Game, Round } from './schema.js';
+import type { Game, Round, GameSpecials } from './schema.js';
 
 /**
  * Ejecuta una transacción en Starknet
@@ -75,12 +75,14 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
   });
 
   try {
-    // Llamar directamente al contrato usando provider.callContract
-    const result = await provider.callContract({
-      contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
-      entrypoint: 'get_game_data',
-      calldata: [gameId.toString()]
-    });
+    const result = await provider.callContract(
+      {
+        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        entrypoint: 'get_game_data',
+        calldata: [gameId.toString()]
+      },
+      'latest'
+    );
 
     console.log(`✅ Datos obtenidos para el juego ${gameId}`);
 
@@ -135,4 +137,88 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
     console.error(`❌ Error al obtener datos del juego ${gameId}:`, error);
     throw error;
   }
+}
+
+/**
+ * Obtiene los GameSpecials de un juego desde el Game View
+ * Retorna un array de effect_card_id (u32[]) extraídos de CurrentSpecialCards
+ */
+export async function getGameSpecials(gameId: number): Promise<number[]> {
+  console.log(`\n📖 Consultando specials del juego ${gameId}...`);
+
+  // Usar SLOT_RPC_URL para el contrato GAME_VIEW que está desplegado en Slot
+  const provider = new RpcProvider({
+    nodeUrl: env.SLOT_RPC_URL,
+    default: true
+  });
+
+  try {
+    const result = await provider.callContract(
+      {
+        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        entrypoint: 'get_special_cards',
+        calldata: [gameId.toString()]
+      },
+      'latest'
+    );
+
+    console.log(`✅ Special cards obtenidos para el juego ${gameId}`);
+
+    // El resultado es un Span<CurrentSpecialCards>
+    // Primero viene la longitud del span
+    const specialsLen = parseInt(result[0]);
+    const specials: number[] = [];
+
+    // CurrentSpecialCards tiene 6 campos: game_id, idx, effect_card_id, is_temporary, remaining, selling_price
+    let idx = 1; // Empezamos después de la longitud
+
+    for (let i = 0; i < specialsLen; i++) {
+      // Parsear CurrentSpecialCards (6 campos)
+      // game_id, idx, effect_card_id, is_temporary, remaining, selling_price
+      idx++; // Saltar game_id
+      idx++; // Saltar card_idx
+      const effect_card_id = result[idx++]; // Este es el que necesitamos
+      idx++; // Saltar is_temporary
+      idx++; // Saltar remaining
+      idx++; // Saltar selling_price
+
+      // Solo guardamos el effect_card_id
+      specials.push(parseInt(effect_card_id));
+    }
+
+    console.log(`   Specials count: ${specials.length}`);
+    console.log(`   Effect card IDs: [${specials.join(', ')}]`);
+
+    return specials;
+  } catch (error) {
+    console.error(`❌ Error al obtener specials del juego ${gameId}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Construye el GameData a partir de Game y specials
+ * GameData tiene estos campos:
+ * - id: u32
+ * - owner: ContractAddress
+ * - player_score: u32
+ * - specials: Span<u32>
+ * - cash: u32
+ * - round: u32
+ * - is_tournament: bool
+ */
+export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
+  // Construir calldata para GameData
+  const calldata = [
+    game.id.toString(),                    // id: u32
+    game.owner,                             // owner: ContractAddress
+    game.player_score.toString(),           // player_score: u32
+    specials.length.toString(),             // specials.len (Span length)
+    ...specials.map(s => s.toString()),     // specials data
+    game.cash.toString(),                   // cash: u32
+    game.round.toString(),                  // round: u32
+    game.is_tournament ? '1' : '0'          // is_tournament: bool
+  ];
+
+  return calldata;
 }

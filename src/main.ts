@@ -3,7 +3,7 @@ import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
-import { executeStarknetTransaction, getGameData } from './starknetExecutor.js';
+import { executeStarknetTransaction, getGameData, getGameSpecials, buildGameDataCalldata } from './starknetExecutor.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -58,7 +58,7 @@ async function handleRoundScore(player: string, gameId: number, playerScore: num
 
   try {
     // Verificar si está configurado el ejecutor de Starknet
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
       console.log('ℹ️  Ejecutor de Starknet no configurado (modo solo lectura)');
       console.log('✅ Evento procesado (sin ejecutar transacción)\n');
       return;
@@ -66,7 +66,7 @@ async function handleRoundScore(player: string, gameId: number, playerScore: num
 
     // Ejecutar la transacción en Starknet
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'record_round_score',
       calldata: [player, gameId.toString(), playerScore.toString()],
     });
@@ -86,8 +86,8 @@ async function handlePlayWinGame(player: string, gameId: number) {
 
   try {
     // Verificar si está configurado el ejecutor de Starknet y Game View
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY || !env.GAME_VIEW_CONTRACT_ADDRESS) {
-      console.log('ℹ️  Ejecutor de Starknet o Game View no configurado (modo solo lectura)');
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.GAME_VIEW_CONTRACT_ADDRESS) {
+      console.log('ℹ️  Profile System o Game View no configurado (modo solo lectura)');
       console.log('✅ Evento procesado (sin ejecutar transacción)\n');
       return;
     }
@@ -98,14 +98,23 @@ async function handlePlayWinGame(player: string, gameId: number) {
     console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
     console.log(`   Round Score: ${round.current_score}/${round.target_score}`);
 
-    // Ejecutar la transacción en Starknet
+    // Guardar GameData en Profile System
+    console.log('📝 Guardando datos del juego en Profile System...');
+
+    // Obtener specials del juego
+    const specials = await getGameSpecials(gameId);
+
+    // Construir calldata para GameData
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+
+    // Ejecutar transacción en Profile System
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
-      entrypoint: 'register_game_won',
-      calldata: [player, gameId.toString()],
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
     });
 
-    console.log('✅ Juego ganado registrado y transacción ejecutada exitosamente\n');
+    console.log('✅ Datos del juego guardados en Profile System exitosamente\n');
   } catch (error) {
     console.error('❌ Error al registrar juego ganado:', error);
   }
@@ -119,21 +128,35 @@ async function handleGameOver(player: string, gameId: number) {
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Ejecutor de Starknet no configurado (modo solo lectura)');
+    // Verificar si está configurado el ejecutor de Starknet y Game View
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY || !env.GAME_VIEW_CONTRACT_ADDRESS) {
+      console.log('ℹ️  Profile System o Game View no configurado (modo solo lectura)');
       console.log('✅ Evento procesado (sin ejecutar transacción)\n');
       return;
     }
 
-    // Ejecutar la transacción en Starknet
+    // Obtener datos del juego desde Game View
+    const { game } = await getGameData(gameId);
+    console.log(`📊 Datos del juego obtenidos:`);
+    console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
+
+    // Guardar GameData en Profile System
+    console.log('📝 Guardando datos del juego en Profile System...');
+
+    // Obtener specials del juego
+    const specials = await getGameSpecials(gameId);
+
+    // Construir calldata para GameData
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+
+    // Ejecutar transacción en Profile System
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
-      entrypoint: 'register_game_over',
-      calldata: [player, gameId.toString()],
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
     });
 
-    console.log('✅ Juego terminado registrado y transacción ejecutada exitosamente\n');
+    console.log('✅ Datos del juego guardados en Profile System exitosamente\n');
   } catch (error) {
     console.error('❌ Error al registrar juego terminado:', error);
   }
