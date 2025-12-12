@@ -3,7 +3,8 @@ import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
-import { executeStarknetTransaction, getGameData, getGameSpecials, buildGameDataCalldata } from './starknetExecutor.js';
+import { getGameData, getGameSpecials, buildGameDataCalldata } from './starknetExecutor.js';
+import { getTransactionQueue } from './transactionQueue.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -11,12 +12,16 @@ global.WebSocket = w3cwebsocket;
 // @ts-ignore
 global.WorkerGlobalScope = global;
 
+// Initialize transaction queue
+const txQueue = getTransactionQueue();
+
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
 console.log(`Torii URL:    ${env.TORII_URL}`);
 console.log(`Relay URL:    ${env.RELAY_URL}`);
 console.log(`World:        ${env.WORLD_ADDRESS}`);
 console.log('═'.repeat(60));
+console.log('💼 Transaction Queue: Initialized');
 console.log('');
 
 /**
@@ -35,16 +40,16 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
       return;
     }
 
-    // Execute transaction in XP System: add_daily_mission_xp
-    await executeStarknetTransaction({
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
       contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_daily_mission_xp',
       calldata: [player, missionType],
     });
 
-    console.log('✅ Daily mission XP added successfully\n');
+    console.log('✅ Daily mission XP transaction queued successfully\n');
   } catch (error) {
-    console.error('❌ Error adding daily mission XP:', error);
+    console.error('❌ Error queueing daily mission XP transaction:', error);
   }
 }
 
@@ -64,16 +69,16 @@ async function handleRoundScore(player: string, gameId: number, playerScore: num
       return;
     }
 
-    // Execute transaction in Starknet
-    await executeStarknetTransaction({
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'record_round_score',
       calldata: [player, gameId.toString(), playerScore.toString()],
     });
 
-    console.log('✅ Score processed and transaction executed successfully\n');
+    console.log('✅ Score transaction queued successfully\n');
   } catch (error) {
-    console.error('❌ Error processing score:', error);
+    console.error('❌ Error queueing score transaction:', error);
   }
 }
 
@@ -107,14 +112,14 @@ async function handlePlayWinGame(player: string, gameId: number) {
     // Build calldata for GameData
     const gameDataCalldata = buildGameDataCalldata(game, specials);
 
-    // Execute transaction in Profile System
-    await executeStarknetTransaction({
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_game_data',
       calldata: gameDataCalldata,
     });
 
-    console.log('✅ Game data saved to Profile System successfully\n');
+    console.log('✅ Game data transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error recording won game:', error);
   }
@@ -149,14 +154,14 @@ async function handleGameOver(player: string, gameId: number) {
     // Build calldata for GameData
     const gameDataCalldata = buildGameDataCalldata(game, specials);
 
-    // Execute transaction in Profile System
-    await executeStarknetTransaction({
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_game_data',
       calldata: gameDataCalldata,
     });
 
-    console.log('✅ Game data saved to Profile System successfully\n');
+    console.log('✅ Game data transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error recording game over:', error);
   }
@@ -179,14 +184,14 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
       return;
     }
 
-    // Execute transaction in XP System: add_level_completion_xp
-    await executeStarknetTransaction({
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
       contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_level_completion_xp',
       calldata: [player, newLevel.toString()],
     });
 
-    console.log('✅ Level completion XP added successfully\n');
+    console.log('✅ Level completion XP transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
   }
