@@ -31,6 +31,10 @@ export const env = {
   // Slot Network Configuration
   SLOT_RPC_URL: process.env.SLOT_RPC_URL || '',
 
+  // Supabase Configuration (for persistent transaction queue)
+  SUPABASE_URL: process.env.SUPABASE_URL || '',
+  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
+
   // Event Listener Mode
   // Si STARKNET_PRIVATE_KEY está configurado, ejecutará transacciones
   // Si no, solo escuchará eventos (modo solo lectura)

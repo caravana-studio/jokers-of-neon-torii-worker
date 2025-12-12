@@ -21,7 +21,6 @@ console.log(`Torii URL:    ${env.TORII_URL}`);
 console.log(`Relay URL:    ${env.RELAY_URL}`);
 console.log(`World:        ${env.WORLD_ADDRESS}`);
 console.log('═'.repeat(60));
-console.log('💼 Transaction Queue: Initialized');
 console.log('');
 
 /**
@@ -200,6 +199,10 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
 // Create main worker
 async function createWorker() {
   console.log('🔌 Initializing Dojo SDK...\n');
+
+  // Initialize transaction queue
+  await txQueue.initialize();
+  console.log('');
 
   // Initialize SDK with example configuration
   const sdk = await init({
