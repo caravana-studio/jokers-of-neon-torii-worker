@@ -3,7 +3,7 @@ import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
-import { executeStarknetTransaction, getGameData } from './starknetExecutor.js';
+import { executeStarknetTransaction, getGameData, getGameSpecials, buildGameDataCalldata } from './starknetExecutor.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -20,164 +20,187 @@ console.log('═'.repeat(60));
 console.log('');
 
 /**
- * Maneja el evento de misión diaria completada
+ * Handles daily mission completed event
  */
 async function handleDailyMissionCompleted(player: string, missionId: string, missionType: string) {
-  console.log(`\n🔄 Procesando misión completada para ${player}...`);
+  console.log(`\n🔄 Processing completed mission for ${player}...`);
   console.log(`   Mission ID: ${missionId}`);
   console.log(`   Mission Type: ${missionType}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet
+    // Check if Starknet executor is configured
     if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  XP System no configurado (modo solo lectura)');
-      console.log('✅ Evento procesado (sin ejecutar transacción)\n');
+      console.log('ℹ️  XP System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
 
-    // Ejecutar la transacción en XP System: add_daily_mission_xp
+    // Execute transaction in XP System: add_daily_mission_xp
     await executeStarknetTransaction({
       contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_daily_mission_xp',
       calldata: [player, missionType],
     });
 
-    console.log('✅ XP de misión diaria agregado exitosamente\n');
+    console.log('✅ Daily mission XP added successfully\n');
   } catch (error) {
-    console.error('❌ Error al agregar XP de misión diaria:', error);
+    console.error('❌ Error adding daily mission XP:', error);
   }
 }
 
 /**
- * Maneja el evento de puntaje de ronda
+ * Handles round score event
  */
 async function handleRoundScore(player: string, gameId: number, playerScore: number) {
-  console.log(`\n🔄 Procesando puntaje de ronda para ${player}...`);
+  console.log(`\n🔄 Processing round score for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Score: ${playerScore}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Ejecutor de Starknet no configurado (modo solo lectura)');
-      console.log('✅ Evento procesado (sin ejecutar transacción)\n');
+    // Check if Starknet executor is configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Starknet executor not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
 
-    // Ejecutar la transacción en Starknet
+    // Execute transaction in Starknet
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'record_round_score',
       calldata: [player, gameId.toString(), playerScore.toString()],
     });
 
-    console.log('✅ Puntaje procesado y transacción ejecutada exitosamente\n');
+    console.log('✅ Score processed and transaction executed successfully\n');
   } catch (error) {
-    console.error('❌ Error al procesar puntaje:', error);
+    console.error('❌ Error processing score:', error);
   }
 }
 
 /**
- * Maneja el evento de juego ganado
+ * Handles game won event
  */
 async function handlePlayWinGame(player: string, gameId: number) {
-  console.log(`\n🔄 Procesando juego ganado para ${player}...`);
+  console.log(`\n🔄 Processing game won for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet y Game View
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY || !env.GAME_VIEW_CONTRACT_ADDRESS) {
-      console.log('ℹ️  Ejecutor de Starknet o Game View no configurado (modo solo lectura)');
-      console.log('✅ Evento procesado (sin ejecutar transacción)\n');
+    // Check if Profile System and Game View are configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.GAME_VIEW_CONTRACT_ADDRESS) {
+      console.log('ℹ️  Profile System or Game View not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
 
-    // Obtener datos del juego desde Game View
+    // Get game data from Game View
     const { game, round } = await getGameData(gameId);
-    console.log(`📊 Datos del juego obtenidos:`);
+    console.log(`📊 Game data retrieved:`);
     console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
     console.log(`   Round Score: ${round.current_score}/${round.target_score}`);
 
-    // Ejecutar la transacción en Starknet
+    // Save GameData to Profile System
+    console.log('📝 Saving game data to Profile System...');
+
+    // Get game specials
+    const specials = await getGameSpecials(gameId);
+
+    // Build calldata for GameData
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+
+    // Execute transaction in Profile System
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
-      entrypoint: 'register_game_won',
-      calldata: [player, gameId.toString()],
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
     });
 
-    console.log('✅ Juego ganado registrado y transacción ejecutada exitosamente\n');
+    console.log('✅ Game data saved to Profile System successfully\n');
   } catch (error) {
-    console.error('❌ Error al registrar juego ganado:', error);
+    console.error('❌ Error recording won game:', error);
   }
 }
 
 /**
- * Maneja el evento de juego terminado
+ * Handles game over event
  */
 async function handleGameOver(player: string, gameId: number) {
-  console.log(`\n🔄 Procesando juego terminado para ${player}...`);
+  console.log(`\n🔄 Processing game over for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet
-    if (!env.STARKNET_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Ejecutor de Starknet no configurado (modo solo lectura)');
-      console.log('✅ Evento procesado (sin ejecutar transacción)\n');
+    // Check if Profile System and Game View are configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY || !env.GAME_VIEW_CONTRACT_ADDRESS) {
+      console.log('ℹ️  Profile System or Game View not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
 
-    // Ejecutar la transacción en Starknet
+    // Get game data from Game View
+    const { game } = await getGameData(gameId);
+    console.log(`📊 Game data retrieved:`);
+    console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
+
+    // Save GameData to Profile System
+    console.log('📝 Saving game data to Profile System...');
+
+    // Get game specials
+    const specials = await getGameSpecials(gameId);
+
+    // Build calldata for GameData
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+
+    // Execute transaction in Profile System
     await executeStarknetTransaction({
-      contractAddress: env.STARKNET_CONTRACT_ADDRESS,
-      entrypoint: 'register_game_over',
-      calldata: [player, gameId.toString()],
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
     });
 
-    console.log('✅ Juego terminado registrado y transacción ejecutada exitosamente\n');
+    console.log('✅ Game data saved to Profile System successfully\n');
   } catch (error) {
-    console.error('❌ Error al registrar juego terminado:', error);
+    console.error('❌ Error recording game over:', error);
   }
 }
 
 /**
- * Maneja el evento de nivel pasado
+ * Handles level passed event
  */
 async function handleLevelPassed(player: string, gameId: number, previousLevel: number, newLevel: number) {
-  console.log(`\n🔄 Procesando nivel pasado para ${player}...`);
+  console.log(`\n🔄 Processing level passed for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Previous Level: ${previousLevel}`);
   console.log(`   New Level: ${newLevel}`);
 
   try {
-    // Verificar si está configurado el ejecutor de Starknet
+    // Check if XP System is configured
     if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  XP System no configurado (modo solo lectura)');
-      console.log('✅ Evento procesado (sin ejecutar transacción)\n');
+      console.log('ℹ️  XP System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
 
-    // Ejecutar la transacción en XP System: add_level_completion_xp
+    // Execute transaction in XP System: add_level_completion_xp
     await executeStarknetTransaction({
       contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_level_completion_xp',
       calldata: [player, newLevel.toString()],
     });
 
-    console.log('✅ XP de nivel completado agregado exitosamente\n');
+    console.log('✅ Level completion XP added successfully\n');
   } catch (error) {
-    console.error('❌ Error al agregar XP de nivel completado:', error);
+    console.error('❌ Error adding level completion XP:', error);
   }
 }
 
-// Crear el worker principal
+// Create main worker
 async function createWorker() {
-  console.log('🔌 Inicializando SDK de Dojo...\n');
+  console.log('🔌 Initializing Dojo SDK...\n');
 
-  // Inicializar SDK con la configuración del ejemplo
+  // Initialize SDK with example configuration
   const sdk = await init({
     client: {
       toriiUrl: env.TORII_URL,
-      relayUrl: env.RELAY_URL, // Debe estar en formato multiaddr
+      relayUrl: env.RELAY_URL, // Must be in multiaddr format
       worldAddress: env.WORLD_ADDRESS || dojoConfig.manifest.world.address,
     },
     domain: {
@@ -188,30 +211,30 @@ async function createWorker() {
     },
   });
 
-  console.log('✅ SDK inicializado correctamente\n');
-  console.log('🚀 Configurando listeners de eventos...\n');
+  console.log('✅ SDK initialized successfully\n');
+  console.log('🚀 Setting up event listeners...\n');
 
-  // Callback cuando se detecta un evento
+  // Callback when an event is detected
   const onEventUpdated = async (response: any) => {
     try {
-      // El response tiene una propiedad 'data' con un array de entidades
+      // Response has a 'data' property with an array of entities
       if (!response || !response.data || response.data.length === 0) return;
 
 
-      // Procesar cada entidad en response.data
+      // Process each entity in response.data
       for (const item of response.data) {
         try {
           const { entityId, models } = item;
 
-          // Buscar eventos en los modelos
+          // Search for events in models
           if (models && models.jokers_of_neon_core) {
             const coreModels = models.jokers_of_neon_core;
 
-            // Verificar si existe DailyMissionCompletedEvent
+            // Check if DailyMissionCompletedEvent exists
             if (coreModels.DailyMissionCompletedEvent) {
               const event = coreModels.DailyMissionCompletedEvent;
 
-              console.log('\n📊 DailyMissionCompletedEvent encontrado!');
+              console.log('\n📊 DailyMissionCompletedEvent found!');
               console.log(`   Entity ID:     ${entityId}`);
               console.log(`   Player:        ${event.player || 'N/A'}`);
               console.log(`   Mission ID:    ${event.id || 'N/A'}`);
@@ -219,7 +242,7 @@ async function createWorker() {
               console.log(`   Timestamp:     ${new Date().toISOString()}`);
               console.log('─'.repeat(60));
 
-              // Procesar el evento
+              // Process the event
               if (event.player && event.id !== undefined && event.mission_type !== undefined) {
                 await handleDailyMissionCompleted(
                   event.player,
@@ -227,15 +250,15 @@ async function createWorker() {
                   event.mission_type.toString()
                 );
               } else {
-                console.log('⚠️  DailyMissionCompletedEvent incompleto - no se procesará');
+                console.log('⚠️  Incomplete DailyMissionCompletedEvent - will not be processed');
               }
             }
 
-            // Verificar si existe RoundScoreEvent
+            // Check if RoundScoreEvent exists
             // if (coreModels.RoundScoreEvent) {
             //   const event = coreModels.RoundScoreEvent;
 
-            //   console.log('\n🎮 RoundScoreEvent encontrado!');
+            //   console.log('\n🎮 RoundScoreEvent found!');
             //   console.log(`   Entity ID:     ${entityId}`);
             //   console.log(`   Player:        ${event.player || 'N/A'}`);
             //   console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
@@ -243,57 +266,57 @@ async function createWorker() {
             //   console.log(`   Timestamp:     ${new Date().toISOString()}`);
             //   console.log('─'.repeat(60));
 
-            //   // Procesar el evento
+            //   // Process the event
             //   if (event.player && event.game_id !== undefined && event.player_score !== undefined) {
             //     await handleRoundScore(event.player, event.game_id, event.player_score);
             //   } else {
-            //     console.log('⚠️  RoundScoreEvent incompleto - no se procesará');
+            //     console.log('⚠️  Incomplete RoundScoreEvent - will not be processed');
             //   }
             // }
 
-            // Verificar si existe PlayWinGameEvent
+            // Check if PlayWinGameEvent exists
             if (coreModels.PlayWinGameEvent) {
               const event = coreModels.PlayWinGameEvent;
 
-              console.log('\n🏆 PlayWinGameEvent encontrado!');
+              console.log('\n🏆 PlayWinGameEvent found!');
               console.log(`   Entity ID:     ${entityId}`);
               console.log(`   Player:        ${event.player || 'N/A'}`);
               console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
               console.log(`   Timestamp:     ${new Date().toISOString()}`);
               console.log('─'.repeat(60));
 
-              // Procesar el evento
+              // Process the event
               if (event.player && event.game_id !== undefined) {
                 await handlePlayWinGame(event.player, event.game_id);
               } else {
-                console.log('⚠️  PlayWinGameEvent incompleto - no se procesará');
+                console.log('⚠️  Incomplete PlayWinGameEvent - will not be processed');
               }
             }
 
-            // Verificar si existe PlayGameOverEvent
+            // Check if PlayGameOverEvent exists
             if (coreModels.PlayGameOverEvent) {
               const event = coreModels.PlayGameOverEvent;
 
-              console.log('\n🏁 PlayGameOverEvent encontrado!');
+              console.log('\n🏁 PlayGameOverEvent found!');
               console.log(`   Entity ID:     ${entityId}`);
               console.log(`   Player:        ${event.player || 'N/A'}`);
               console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
               console.log(`   Timestamp:     ${new Date().toISOString()}`);
               console.log('─'.repeat(60));
 
-              // Procesar el evento
+              // Process the event
               if (event.player && event.game_id !== undefined) {
                 await handleGameOver(event.player, event.game_id);
               } else {
-                console.log('⚠️  PlayGameOverEvent incompleto - no se procesará');
+                console.log('⚠️  Incomplete PlayGameOverEvent - will not be processed');
               }
             }
 
-            // Verificar si existe LevelPassedEvent
+            // Check if LevelPassedEvent exists
             if (coreModels.LevelPassedEvent) {
               const event = coreModels.LevelPassedEvent;
 
-              console.log('\n⬆️  LevelPassedEvent encontrado!');
+              console.log('\n⬆️  LevelPassedEvent found!');
               console.log(`   Entity ID:       ${entityId}`);
               console.log(`   Player:          ${event.player || 'N/A'}`);
               console.log(`   Game ID:         ${event.game_id || 'N/A'}`);
@@ -302,7 +325,7 @@ async function createWorker() {
               console.log(`   Timestamp:       ${new Date().toISOString()}`);
               console.log('─'.repeat(60));
 
-              // Procesar el evento
+              // Process the event
               if (event.player && event.game_id !== undefined && event.previous_level !== undefined && event.new_level !== undefined) {
                 await handleLevelPassed(
                   event.player,
@@ -311,23 +334,23 @@ async function createWorker() {
                   Number(event.new_level)
                 );
               } else {
-                console.log('⚠️  LevelPassedEvent incompleto - no se procesará');
+                console.log('⚠️  Incomplete LevelPassedEvent - will not be processed');
               }
             }
 
-            // Si no es ninguno de los eventos que nos interesan, se ignora silenciosamente
+            // If it's not one of the events we're interested in, silently ignore it
           }
         } catch (error) {
-          console.error('❌ Error al procesar item:', error);
+          console.error('❌ Error processing item:', error);
           console.error(error);
         }
       }
     } catch (error) {
-      console.error('❌ Error en callback:', error);
+      console.error('❌ Error in callback:', error);
     }
   };
 
-  // Crear query para eventos
+  // Create query for events
   const query = new HistoricalToriiQueryBuilder()
     .withEntityModels([
       'jokers_of_neon_core-DailyMissionCompletedEvent',
@@ -340,50 +363,50 @@ async function createWorker() {
     .withLimit(10);
 
   try {
-    // Obtener eventos históricos iniciales
+    // Get initial historical events
     const historicalEvents = await sdk.getEventMessages({ query });
     const items = historicalEvents.getItems();
-    console.log(`📊 Eventos históricos iniciales: ${items.length}\n`);
+    console.log(`📊 Initial historical events: ${items.length}\n`);
 
-    // Mostrar eventos históricos si existen
+    // Show historical events if they exist
     if (items.length > 0) {
-      console.log('📜 Eventos históricos encontrados:');
+      console.log('📜 Historical events found:');
       items.forEach((event: any, index: number) => {
         console.log(`   ${index + 1}. Player: ${event.player || 'N/A'}, Mission: ${event.id || 'N/A'}`);
       });
       console.log('');
     }
   } catch (error) {
-    console.warn('⚠️  Error al obtener eventos históricos:', error);
+    console.warn('⚠️  Error retrieving historical events:', error);
   }
 
-  // Suscribirse a eventos en tiempo real
-  console.log('📡 Suscribiéndose a eventos en tiempo real...\n');
+  // Subscribe to real-time events
+  console.log('📡 Subscribing to real-time events...\n');
 
   const [, subscription] = await sdk.subscribeEventQuery({
     query,
     callback: onEventUpdated,
   });
 
-  console.log('✅ Listener configurado exitosamente\n');
-  console.log('👂 Escuchando eventos:');
+  console.log('✅ Listener configured successfully\n');
+  console.log('👂 Listening for events:');
   console.log('   - DailyMissionCompletedEvent');
   console.log('   - RoundScoreEvent');
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
   console.log('   - LevelPassedEvent\n');
-  console.log('Presiona Ctrl+C para detener\n');
+  console.log('Press Ctrl+C to stop\n');
 
-  // Mantener el proceso vivo
+  // Keep the process alive
   process.on('SIGINT', () => {
-    console.log('\n\n⏹️  Deteniendo listeners...');
+    console.log('\n\n⏹️  Stopping listeners...');
     subscription.cancel();
     process.exit(0);
   });
 }
 
-// Iniciar el worker
+// Start the worker
 createWorker().catch((error) => {
-  console.error('❌ Error fatal al iniciar el worker:', error);
+  console.error('❌ Fatal error starting worker:', error);
   process.exit(1);
 });
