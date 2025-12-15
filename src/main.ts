@@ -3,7 +3,7 @@ import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
-import { getGameData, getGameSpecials, buildGameDataCalldata } from './starknetExecutor.js';
+import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata } from './starknetExecutor.js';
 import { getTransactionQueue } from './transactionQueue.js';
 
 // Configuración necesaria para WebSocket en Node.js
@@ -161,6 +161,24 @@ async function handleGameOver(player: string, gameId: number) {
     });
 
     console.log('✅ Game data transaction queued successfully\n');
+
+    // Get player stats from Game View
+    console.log('📊 Obtaining player stats from Game View...');
+    const playerStats = await getPlayerStats(gameId);
+    console.log(`   Player Stats retrieved for ${playerStats.address}`);
+
+    // Build calldata for PlayerStats
+    const playerStatsCalldata = buildPlayerStatsCalldata(player, playerStats);
+
+    // Add stats transaction to queue
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_stats',
+      calldata: playerStatsCalldata,
+    });
+
+    console.log('✅ Player stats transaction queued successfully\n');
+
   } catch (error) {
     console.error('❌ Error recording game over:', error);
   }
@@ -191,6 +209,47 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
     });
 
     console.log('✅ Level completion XP transaction queued successfully\n');
+
+    // When player reaches level 4, record game won in stats
+    if (newLevel === 4) { //TODO: cambiar a 4
+      console.log('🏆 Player passed level 3 , recording game won in stats...');
+
+      // Create PlayerStats with only games_won = 1, rest = 0
+      const playerStatsCalldata = [
+        player,                // address
+        '0',                   // games_played
+        '1',                   // games_won
+        '0',                   // high_card_played
+        '0',                   // pair_played
+        '0',                   // two_pair_played
+        '0',                   // three_of_a_kind_played
+        '0',                   // four_of_a_kind_played
+        '0',                   // five_of_a_kind_played
+        '0',                   // full_house_played
+        '0',                   // flush_played
+        '0',                   // straight_played
+        '0',                   // straight_flush_played
+        '0',                   // royal_flush_played
+        '0',                   // loot_boxes_purchased
+        '0',                   // cards_purchased
+        '0',                   // specials_purchased
+        '0',                   // specials_sold
+        '0',                   // power_ups_purchased
+        '0',                   // level_ups_purchased
+        '0',                   // modifiers_purchased
+        '0',                   // rerolls_purchased
+        '0'                    // burn_purchased
+      ];
+
+      // Add stats transaction to queue
+      txQueue.enqueue({
+        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+        entrypoint: 'add_stats',
+        calldata: playerStatsCalldata,
+      });
+
+      console.log('✅ Game won stats transaction queued successfully\n');
+    }
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
   }

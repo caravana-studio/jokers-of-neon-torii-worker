@@ -1,6 +1,6 @@
 import { Account, Call, RpcProvider } from 'starknet';
 import { env } from './env.js';
-import type { Game, Round, GameSpecials } from './schema.js';
+import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
 
 /**
  * Ejecuta una transacción en Starknet
@@ -218,6 +218,128 @@ export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
     game.cash.toString(),                   // cash: u32
     game.round.toString(),                  // round: u32
     game.is_tournament ? '1' : '0'          // is_tournament: bool
+  ];
+
+  return calldata;
+}
+
+/**
+ * Llama a la función de vista get_player_stats del contrato GAME_VIEW
+ * Retorna las PlayerStats del juego especificado
+ */
+export async function getPlayerStats(gameId: number): Promise<PlayerStats> {
+  console.log(`\n📖 Consultando estadísticas del jugador para el juego ${gameId}...`);
+
+  // Usar SLOT_RPC_URL para el contrato GAME_VIEW que está desplegado en Slot
+  const provider = new RpcProvider({
+    nodeUrl: env.SLOT_RPC_URL,
+    default: true
+  });
+
+  try {
+    const result = await provider.callContract(
+      {
+        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        entrypoint: 'get_player_stats',
+        calldata: [gameId.toString()]
+      },
+      'latest'
+    );
+
+    console.log(`✅ Estadísticas obtenidas para el juego ${gameId}`);
+
+    // Parsear el resultado según la estructura de PlayerStats
+    let idx = 0;
+
+    const playerStats: PlayerStats = {
+      address: result[idx++],
+      games_played: result[idx++],
+      games_won: result[idx++],
+      high_card_played: result[idx++],
+      pair_played: result[idx++],
+      two_pair_played: result[idx++],
+      three_of_a_kind_played: result[idx++],
+      four_of_a_kind_played: result[idx++],
+      five_of_a_kind_played: result[idx++],
+      full_house_played: result[idx++],
+      flush_played: result[idx++],
+      straight_played: result[idx++],
+      straight_flush_played: result[idx++],
+      royal_flush_played: result[idx++],
+      loot_boxes_purchased: result[idx++],
+      cards_purchased: result[idx++],
+      specials_purchased: result[idx++],
+      specials_sold: result[idx++],
+      power_ups_purchased: result[idx++],
+      level_ups_purchased: result[idx++],
+      modifiers_purchased: result[idx++],
+      rerolls_purchased: result[idx++],
+      burn_purchased: result[idx++]
+    };
+
+    console.log(`   Player: ${playerStats.address}`);
+    console.log(`   Games Played: ${playerStats.games_played}, Games Won: ${playerStats.games_won}`);
+
+    return playerStats;
+  } catch (error) {
+    console.error(`❌ Error al obtener estadísticas del jugador para el juego ${gameId}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Construye el calldata para add_stats a partir de PlayerStats
+ * PlayerStats tiene estos campos:
+ * - address: ContractAddress
+ * - games_played: u32
+ * - games_won: u32
+ * - high_card_played: u32
+ * - pair_played: u32
+ * - two_pair_played: u32
+ * - three_of_a_kind_played: u32
+ * - four_of_a_kind_played: u32
+ * - five_of_a_kind_played: u32
+ * - full_house_played: u32
+ * - flush_played: u32
+ * - straight_played: u32
+ * - straight_flush_played: u32
+ * - royal_flush_played: u32
+ * - loot_boxes_purchased: u32
+ * - cards_purchased: u32
+ * - specials_purchased: u32
+ * - specials_sold: u32
+ * - power_ups_purchased: u32
+ * - level_ups_purchased: u32
+ * - modifiers_purchased: u32
+ * - rerolls_purchased: u32
+ * - burn_purchased: u32
+ */
+export function buildPlayerStatsCalldata(playerAddress: string, playerStats: PlayerStats): any[] {
+  // Construir calldata para PlayerStats
+  const calldata = [
+    playerAddress,
+    playerStats.games_played.toString(),
+    playerStats.games_won.toString(),
+    playerStats.high_card_played.toString(),
+    playerStats.pair_played.toString(),
+    playerStats.two_pair_played.toString(),
+    playerStats.three_of_a_kind_played.toString(),
+    playerStats.four_of_a_kind_played.toString(),
+    playerStats.five_of_a_kind_played.toString(),
+    playerStats.full_house_played.toString(),
+    playerStats.flush_played.toString(),
+    playerStats.straight_played.toString(),
+    playerStats.straight_flush_played.toString(),
+    playerStats.royal_flush_played.toString(),
+    playerStats.loot_boxes_purchased.toString(),
+    playerStats.cards_purchased.toString(),
+    playerStats.specials_purchased.toString(),
+    playerStats.specials_sold.toString(),
+    playerStats.power_ups_purchased.toString(),
+    playerStats.level_ups_purchased.toString(),
+    playerStats.modifiers_purchased.toString(),
+    playerStats.rerolls_purchased.toString(),
+    playerStats.burn_purchased.toString()
   ];
 
   return calldata;
