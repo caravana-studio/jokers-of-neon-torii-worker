@@ -185,6 +185,63 @@ async function handleGameOver(player: string, gameId: number) {
 }
 
 /**
+ * Handles create game event
+ */
+async function handleCreateGame(player: string, gameId: number) {
+  console.log(`\n🔄 Processing game creation for ${player}...`);
+  console.log(`   Game ID: ${gameId}`);
+
+  try {
+    // Check if Profile System is configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Profile System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
+      return;
+    }
+
+    console.log('🎮 Recording game played in stats...');
+
+    // Create PlayerStats with only games_played = 1, rest = 0
+    const playerStatsCalldata = [
+      player,                // address
+      '1',                   // games_played
+      '0',                   // games_won
+      '0',                   // high_card_played
+      '0',                   // pair_played
+      '0',                   // two_pair_played
+      '0',                   // three_of_a_kind_played
+      '0',                   // four_of_a_kind_played
+      '0',                   // five_of_a_kind_played
+      '0',                   // full_house_played
+      '0',                   // flush_played
+      '0',                   // straight_played
+      '0',                   // straight_flush_played
+      '0',                   // royal_flush_played
+      '0',                   // loot_boxes_purchased
+      '0',                   // cards_purchased
+      '0',                   // specials_purchased
+      '0',                   // specials_sold
+      '0',                   // power_ups_purchased
+      '0',                   // level_ups_purchased
+      '0',                   // modifiers_purchased
+      '0',                   // rerolls_purchased
+      '0'                    // burn_purchased
+    ];
+
+    // Add stats transaction to queue
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_stats',
+      calldata: playerStatsCalldata,
+    });
+
+    console.log('✅ Game played stats transaction queued successfully\n');
+  } catch (error) {
+    console.error('❌ Error recording game creation:', error);
+  }
+}
+
+/**
  * Handles level passed event
  */
 async function handleLevelPassed(player: string, gameId: number, previousLevel: number, newLevel: number) {
@@ -321,6 +378,25 @@ async function createWorker() {
               }
             }
 
+            // Check if CreateGameEvent exists
+            if (coreModels.CreateGameEvent) {
+              const event = coreModels.CreateGameEvent;
+
+              console.log('\n🎮 CreateGameEvent found!');
+              console.log(`   Entity ID:     ${entityId}`);
+              console.log(`   Player:        ${event.player || 'N/A'}`);
+              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
+              console.log(`   Timestamp:     ${new Date().toISOString()}`);
+              console.log('─'.repeat(60));
+
+              // Process the event
+              if (event.player && event.game_id !== undefined) {
+                await handleCreateGame(event.player, event.game_id);
+              } else {
+                console.log('⚠️  Incomplete CreateGameEvent - will not be processed');
+              }
+            }
+
             // Check if RoundScoreEvent exists
             // if (coreModels.RoundScoreEvent) {
             //   const event = coreModels.RoundScoreEvent;
@@ -421,6 +497,7 @@ async function createWorker() {
   const query = new HistoricalToriiQueryBuilder()
     .withEntityModels([
       'jokers_of_neon_core-DailyMissionCompletedEvent',
+      'jokers_of_neon_core-CreateGameEvent',
       'jokers_of_neon_core-RoundScoreEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
       'jokers_of_neon_core-PlayGameOverEvent',
@@ -458,6 +535,7 @@ async function createWorker() {
   console.log('✅ Listener configured successfully\n');
   console.log('👂 Listening for events:');
   console.log('   - DailyMissionCompletedEvent');
+  console.log('   - CreateGameEvent');
   console.log('   - RoundScoreEvent');
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
