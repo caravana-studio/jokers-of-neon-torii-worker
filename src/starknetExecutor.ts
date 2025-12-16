@@ -206,6 +206,8 @@ export async function getGameSpecials(gameId: number): Promise<number[]> {
  * - cash: u32
  * - round: u32
  * - is_tournament: bool
+ * - level: u32
+ * - player_name: felt252
  */
 export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
   // Construir calldata para GameData
@@ -217,7 +219,9 @@ export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
     ...specials.map(s => s.toString()),     // specials data
     game.cash.toString(),                   // cash: u32
     game.round.toString(),                  // round: u32
-    game.is_tournament ? '1' : '0'          // is_tournament: bool
+    game.is_tournament ? '1' : '0',         // is_tournament: bool
+    game.level.toString(),                  // level: u32
+    game.player_name.toString()             // player_name: felt252
   ];
 
   return calldata;
