@@ -1,11 +1,11 @@
 # Jokers of Neon - Event Listener
 
-Bot para escuchar eventos `DailyMissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
+Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
 
 ## Características
 
 - ✅ Escucha eventos en tiempo real desde Torii
-- ✅ Procesa eventos `DailyMissionCompletedEvent`
+- ✅ Procesa eventos `MissionCompletedEvent`
 - ✅ Modo solo lectura (sin ejecutar transacciones)
 - ✅ Modo ejecución (ejecuta transacciones en Starknet)
 - ✅ Basado en el SDK oficial de Dojo.js
@@ -129,7 +129,7 @@ World:        0x...
 
 ✅ Listener configurado exitosamente
 
-👂 Escuchando eventos DailyMissionCompletedEvent...
+👂 Escuchando eventos MissionCompletedEvent...
 
 Presiona Ctrl+C para detener
 ```

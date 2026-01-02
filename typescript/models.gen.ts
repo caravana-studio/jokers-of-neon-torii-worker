@@ -473,8 +473,8 @@ export interface CurrentHandEvent {
 	cards: Array<BigNumberish>;
 }
 
-// Type definition for `jokers_of_neon_core::models::events::DailyMissionCompletedEvent` struct
-export interface DailyMissionCompletedEvent {
+// Type definition for `jokers_of_neon_core::models::events::MissionCompletedEvent` struct
+export interface MissionCompletedEvent {
 	player: string;
 	id: BigNumberish;
 	mission_type: BigNumberish;
@@ -982,7 +982,7 @@ export interface SchemaType extends ISchemaType {
 		CardScoreEvent: CardScoreEvent,
 		CreateGameEvent: CreateGameEvent,
 		CurrentHandEvent: CurrentHandEvent,
-		DailyMissionCompletedEvent: DailyMissionCompletedEvent,
+		MissionCompletedEvent: MissionCompletedEvent,
 		DetailEarnedEvent: DetailEarnedEvent,
 		GameEvent: GameEvent,
 		GamePowerUpEvent: GamePowerUpEvent,
@@ -1440,7 +1440,7 @@ export const schema: SchemaType = {
 			game_id: 0,
 			cards: [0],
 		},
-		DailyMissionCompletedEvent: {
+		MissionCompletedEvent: {
 			player: "",
 			id: 0,
 			mission_type: 0,
@@ -1856,7 +1856,7 @@ export enum ModelsMapping {
 	CardScoreEvent = 'jokers_of_neon_core-CardScoreEvent',
 	CreateGameEvent = 'jokers_of_neon_core-CreateGameEvent',
 	CurrentHandEvent = 'jokers_of_neon_core-CurrentHandEvent',
-	DailyMissionCompletedEvent = 'jokers_of_neon_core-DailyMissionCompletedEvent',
+	MissionCompletedEvent = 'jokers_of_neon_core-MissionCompletedEvent',
 	DetailEarnedEvent = 'jokers_of_neon_core-DetailEarnedEvent',
 	GameEvent = 'jokers_of_neon_core-GameEvent',
 	GamePowerUpEvent = 'jokers_of_neon_core-GamePowerUpEvent',

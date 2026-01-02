@@ -354,11 +354,11 @@ async function createWorker() {
           if (models && models.jokers_of_neon_core) {
             const coreModels = models.jokers_of_neon_core;
 
-            // Check if DailyMissionCompletedEvent exists
-            if (coreModels.DailyMissionCompletedEvent) {
-              const event = coreModels.DailyMissionCompletedEvent;
+            // Check if MissionCompletedEvent exists
+            if (coreModels.MissionCompletedEvent) {
+              const event = coreModels.MissionCompletedEvent;
 
-              console.log('\n📊 DailyMissionCompletedEvent found!');
+              console.log('\n📊 MissionCompletedEvent found!');
               console.log(`   Entity ID:     ${entityId}`);
               console.log(`   Player:        ${event.player || 'N/A'}`);
               console.log(`   Mission ID:    ${event.id || 'N/A'}`);
@@ -374,7 +374,7 @@ async function createWorker() {
                   event.mission_type.toString()
                 );
               } else {
-                console.log('⚠️  Incomplete DailyMissionCompletedEvent - will not be processed');
+                console.log('⚠️  Incomplete MissionCompletedEvent - will not be processed');
               }
             }
 
@@ -496,7 +496,7 @@ async function createWorker() {
   // Create query for events
   const query = new HistoricalToriiQueryBuilder()
     .withEntityModels([
-      'jokers_of_neon_core-DailyMissionCompletedEvent',
+      'jokers_of_neon_core-MissionCompletedEvent',
       'jokers_of_neon_core-CreateGameEvent',
       'jokers_of_neon_core-RoundScoreEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
@@ -534,7 +534,7 @@ async function createWorker() {
 
   console.log('✅ Listener configured successfully\n');
   console.log('👂 Listening for events:');
-  console.log('   - DailyMissionCompletedEvent');
+  console.log('   - MissionCompletedEvent');
   console.log('   - CreateGameEvent');
   console.log('   - RoundScoreEvent');
   console.log('   - PlayWinGameEvent');
