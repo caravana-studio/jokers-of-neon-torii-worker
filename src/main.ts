@@ -92,7 +92,7 @@ async function handlePlayWinGame(player: string, gameId: number) {
     const roundDataCalldata = buildRoundDataCalldata(game, round, player);
 
     // Add transaction to queue
-    txQueue.enqueue({
+    await txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_round_data',
       calldata: roundDataCalldata,
@@ -110,7 +110,7 @@ async function handlePlayWinGame(player: string, gameId: number) {
     const gameDataCalldata = buildGameDataCalldata(game, specials);
 
     // Add transaction to queue instead of executing directly
-    txQueue.enqueue({
+    await txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_game_data',
       calldata: gameDataCalldata,
