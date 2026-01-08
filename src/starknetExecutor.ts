@@ -125,7 +125,14 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
     };
 
     // Parsear Round struct
-    // Primero viene el array de rages (Span<u32>)
+    // Orden: game_id, current_score, target_score, remaining_plays, remaining_discards, rages (Span<u32>)
+    const round_game_id = result[idx++];
+    const round_current_score = result[idx++];
+    const round_target_score = result[idx++];
+    const round_remaining_plays = result[idx++];
+    const round_remaining_discards = result[idx++];
+
+    // Ahora viene el array de rages (Span<u32>)
     const ragesLen = parseInt(result[idx++]);
     const rages: string[] = [];
     for (let i = 0; i < ragesLen; i++) {
@@ -133,11 +140,11 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
     }
 
     const round: Round = {
-      game_id: result[idx++],
-      current_score: result[idx++],
-      target_score: result[idx++],
-      remaining_plays: result[idx++],
-      remaining_discards: result[idx++],
+      game_id: round_game_id,
+      current_score: round_current_score,
+      target_score: round_target_score,
+      remaining_plays: round_remaining_plays,
+      remaining_discards: round_remaining_discards,
       rages
     };
 
