@@ -3,7 +3,7 @@ import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
-import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata } from './starknetExecutor.js';
+import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata, buildRoundDataCalldata } from './starknetExecutor.js';
 import { getTransactionQueue } from './transactionQueue.js';
 
 // Configuración necesaria para WebSocket en Node.js
@@ -54,31 +54,13 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
 
 /**
  * Handles round score event
+ * Note: set_round_data is called in handlePlayWinGame instead
  */
 async function handleRoundScore(player: string, gameId: number, playerScore: number) {
-  console.log(`\n🔄 Processing round score for ${player}...`);
+  console.log(`\n📊 RoundScoreEvent received for ${player}`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Score: ${playerScore}`);
-
-  try {
-    // Check if Starknet executor is configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Starknet executor not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    // Add transaction to queue instead of executing directly
-    txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'record_round_score',
-      calldata: [player, gameId.toString(), playerScore.toString()],
-    });
-
-    console.log('✅ Score transaction queued successfully\n');
-  } catch (error) {
-    console.error('❌ Error queueing score transaction:', error);
-  }
+  console.log('ℹ️  No action taken (set_round_data is called on PlayWinGameEvent)\n');
 }
 
 /**
@@ -101,6 +83,22 @@ async function handlePlayWinGame(player: string, gameId: number) {
     console.log(`📊 Game data retrieved:`);
     console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
     console.log(`   Round Score: ${round.current_score}/${round.target_score}`);
+    console.log(`   Rages: [${round.rages.join(', ')}]`);
+
+    // Save RoundData to Profile System
+    console.log('📝 Saving round data to Profile System...');
+
+    // Build calldata for RoundData
+    const roundDataCalldata = buildRoundDataCalldata(game, round, player);
+
+    // Add transaction to queue
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_round_data',
+      calldata: roundDataCalldata,
+    });
+
+    console.log('✅ Round data transaction queued successfully');
 
     // Save GameData to Profile System
     console.log('📝 Saving game data to Profile System...');
@@ -398,24 +396,24 @@ async function createWorker() {
             }
 
             // Check if RoundScoreEvent exists
-            // if (coreModels.RoundScoreEvent) {
-            //   const event = coreModels.RoundScoreEvent;
+            if (coreModels.RoundScoreEvent) {
+              const event = coreModels.RoundScoreEvent;
 
-            //   console.log('\n🎮 RoundScoreEvent found!');
-            //   console.log(`   Entity ID:     ${entityId}`);
-            //   console.log(`   Player:        ${event.player || 'N/A'}`);
-            //   console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-            //   console.log(`   Player Score:  ${event.player_score || 'N/A'}`);
-            //   console.log(`   Timestamp:     ${new Date().toISOString()}`);
-            //   console.log('─'.repeat(60));
+              console.log('\n🎮 RoundScoreEvent found!');
+              console.log(`   Entity ID:     ${entityId}`);
+              console.log(`   Player:        ${event.player || 'N/A'}`);
+              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
+              console.log(`   Player Score:  ${event.player_score || 'N/A'}`);
+              console.log(`   Timestamp:     ${new Date().toISOString()}`);
+              console.log('─'.repeat(60));
 
-            //   // Process the event
-            //   if (event.player && event.game_id !== undefined && event.player_score !== undefined) {
-            //     await handleRoundScore(event.player, event.game_id, event.player_score);
-            //   } else {
-            //     console.log('⚠️  Incomplete RoundScoreEvent - will not be processed');
-            //   }
-            // }
+              // Process the event
+              if (event.player && event.game_id !== undefined && event.player_score !== undefined) {
+                await handleRoundScore(event.player, event.game_id, event.player_score);
+              } else {
+                console.log('⚠️  Incomplete RoundScoreEvent - will not be processed');
+              }
+            }
 
             // Check if PlayWinGameEvent exists
             if (coreModels.PlayWinGameEvent) {
