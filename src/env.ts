@@ -35,6 +35,9 @@ export const env = {
   SUPABASE_URL: process.env.SUPABASE_URL || '',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
 
+  // Game Data API
+  FULL_GAME_API_URL: process.env.FULL_GAME_API_URL || 'https://jokers-of-neon-data.vercel.app/api/full-game',
+
   // Event Listener Mode
   // Si STARKNET_PRIVATE_KEY está configurado, ejecutará transacciones
   // Si no, solo escuchará eventos (modo solo lectura)

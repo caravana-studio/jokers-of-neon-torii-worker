@@ -67,3 +67,58 @@ ON torii_worker_transaction_queue
 FOR ALL
 USING (true)
 WITH CHECK (true);
+
+-- ============================================================================
+-- Game Steps Table
+-- Stores step-by-step snapshots of game state for replay functionality
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS game_steps (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  game_id INTEGER NOT NULL,
+  step INTEGER NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+  -- Ensure unique combination of game_id and step
+  CONSTRAINT unique_game_step UNIQUE (game_id, step)
+);
+
+-- Index for faster queries by game_id
+CREATE INDEX IF NOT EXISTS idx_game_steps_game_id ON game_steps(game_id);
+
+-- Index for faster queries by game_id and step combination
+CREATE INDEX IF NOT EXISTS idx_game_steps_game_id_step ON game_steps(game_id, step);
+
+-- Trigger to update updated_at on every update
+DROP TRIGGER IF EXISTS update_game_steps_updated_at ON game_steps;
+CREATE TRIGGER update_game_steps_updated_at
+  BEFORE UPDATE ON game_steps
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+-- Comments for documentation
+COMMENT ON TABLE game_steps IS 'Stores step-by-step snapshots of game state for replay functionality';
+COMMENT ON COLUMN game_steps.id IS 'Unique identifier (UUID)';
+COMMENT ON COLUMN game_steps.game_id IS 'The ID of the game';
+COMMENT ON COLUMN game_steps.step IS 'Step number in the game progression (0-indexed, auto-calculated per game_id)';
+COMMENT ON COLUMN game_steps.data IS 'Complete game state data from /api/full-game endpoint';
+COMMENT ON COLUMN game_steps.created_at IS 'When the step was recorded';
+COMMENT ON COLUMN game_steps.updated_at IS 'Last update timestamp';
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE game_steps ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Allow anyone to read all game steps
+CREATE POLICY "Allow public read access to game steps"
+  ON game_steps
+  FOR SELECT
+  USING (true);
+
+-- Policy: Allow all operations with anon key (for the worker)
+CREATE POLICY "Allow all operations on game steps"
+  ON game_steps
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);

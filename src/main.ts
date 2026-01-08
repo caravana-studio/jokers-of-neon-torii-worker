@@ -5,6 +5,7 @@ import { env } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
 import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata, buildRoundDataCalldata } from './starknetExecutor.js';
 import { getTransactionQueue } from './transactionQueue.js';
+import { fetchAndSaveGameStep, EmptyGameDataError } from './services/gameStepsService.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -54,13 +55,41 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
 
 /**
  * Handles round score event
- * Note: set_round_data is called in handlePlayWinGame instead
+ * Fetches game data from API and saves it as a game step
  */
 async function handleRoundScore(player: string, gameId: number, playerScore: number) {
   console.log(`\n📊 RoundScoreEvent received for ${player}`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Score: ${playerScore}`);
-  console.log('ℹ️  No action taken (set_round_data is called on PlayWinGameEvent)\n');
+
+  try {
+    // Check if Supabase is configured
+    if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+      console.log('ℹ️  Supabase not configured (read-only mode)');
+      console.log('✅ Event processed (without saving game step)\n');
+      return;
+    }
+
+    // Fetch game data from API and save as a game step
+    console.log('🔄 Fetching and saving game step...');
+    const result = await fetchAndSaveGameStep(gameId);
+
+    if (result) {
+      console.log(`✅ Game step saved successfully: step=${result.step}\n`);
+    } else {
+      console.log('ℹ️  Game step not saved (Supabase not configured)\n');
+    }
+  } catch (error) {
+    if (error instanceof EmptyGameDataError) {
+      // API returned empty data - this is not a critical error, just skip saving
+      console.warn(`⚠️  Skipping game step: ${error.message}`);
+    } else {
+      // Other errors (network, API down, etc.)
+      console.error('❌ Error saving game step:', error);
+    }
+    // Worker continues running - errors don't stop the listener
+    console.log('👂 Continuing to listen for events...\n');
+  }
 }
 
 /**
