@@ -3,6 +3,18 @@ import { env } from './env.js';
 import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
 
 /**
+ * RoundData structure for set_round_data
+ */
+export interface RoundData {
+  game_id: number | string;
+  round_id: number | string;
+  player_address: string;
+  current_score: number | string;
+  target_score: number | string;
+  rages: string[];
+}
+
+/**
  * Ejecuta una transacción en Starknet
  */
 export async function executeStarknetTransaction(params: {
@@ -113,7 +125,14 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
     };
 
     // Parsear Round struct
-    // Primero viene el array de rages (Span<u32>)
+    // Orden: game_id, current_score, target_score, remaining_plays, remaining_discards, rages (Span<u32>)
+    const round_game_id = result[idx++];
+    const round_current_score = result[idx++];
+    const round_target_score = result[idx++];
+    const round_remaining_plays = result[idx++];
+    const round_remaining_discards = result[idx++];
+
+    // Ahora viene el array de rages (Span<u32>)
     const ragesLen = parseInt(result[idx++]);
     const rages: string[] = [];
     for (let i = 0; i < ragesLen; i++) {
@@ -121,11 +140,11 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
     }
 
     const round: Round = {
-      game_id: result[idx++],
-      current_score: result[idx++],
-      target_score: result[idx++],
-      remaining_plays: result[idx++],
-      remaining_discards: result[idx++],
+      game_id: round_game_id,
+      current_score: round_current_score,
+      target_score: round_target_score,
+      remaining_plays: round_remaining_plays,
+      remaining_discards: round_remaining_discards,
       rages
     };
 
@@ -344,6 +363,31 @@ export function buildPlayerStatsCalldata(playerAddress: string, playerStats: Pla
     playerStats.modifiers_purchased.toString(),
     playerStats.rerolls_purchased.toString(),
     playerStats.burn_purchased.toString()
+  ];
+
+  return calldata;
+}
+
+/**
+ * Construye el RoundData a partir de Game, Round y player address
+ * RoundData tiene estos campos:
+ * - game_id: u32
+ * - round_id: u32
+ * - player_address: ContractAddress
+ * - current_score: u32
+ * - target_score: u32
+ * - rages: Span<u32>
+ */
+export function buildRoundDataCalldata(game: Game, round: Round, playerAddress: string): any[] {
+  // Construir calldata para RoundData
+  const calldata = [
+    game.id.toString(),                     // game_id: u32
+    game.round.toString(),                  // round_id: u32 (from game.round)
+    playerAddress,                          // player_address: ContractAddress
+    round.current_score.toString(),         // current_score: u32
+    round.target_score.toString(),          // target_score: u32
+    round.rages.length.toString(),          // rages.len (Span length)
+    ...round.rages.map(r => r.toString())   // rages data
   ];
 
   return calldata;
