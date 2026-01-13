@@ -54,13 +54,13 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
 }
 
 /**
- * Handles round score event
+ * Handles current hand event
  * Fetches game data from API and saves it as a game step
  */
-async function handleRoundScore(player: string, gameId: number, playerScore: number) {
-  console.log(`\n📊 RoundScoreEvent received for ${player}`);
+async function handleCurrentHand(gameId: number, cards: number[]) {
+  console.log(`\n📊 CurrentHandEvent received`);
   console.log(`   Game ID: ${gameId}`);
-  console.log(`   Score: ${playerScore}`);
+  console.log(`   Cards: [${cards.join(', ')}]`);
 
   try {
     // Check if Supabase is configured
@@ -424,23 +424,22 @@ async function createWorker() {
               }
             }
 
-            // Check if RoundScoreEvent exists
-            if (coreModels.RoundScoreEvent) {
-              const event = coreModels.RoundScoreEvent;
+            // Check if CurrentHandEvent exists
+            if (coreModels.CurrentHandEvent) {
+              const event = coreModels.CurrentHandEvent;
 
-              console.log('\n🎮 RoundScoreEvent found!');
+              console.log('\n🎮 CurrentHandEvent found!');
               console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
               console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-              console.log(`   Player Score:  ${event.player_score || 'N/A'}`);
+              console.log(`   Cards:         ${event.cards ? `[${event.cards.join(', ')}]` : 'N/A'}`);
               console.log(`   Timestamp:     ${new Date().toISOString()}`);
               console.log('─'.repeat(60));
 
               // Process the event
-              if (event.player && event.game_id !== undefined && event.player_score !== undefined) {
-                await handleRoundScore(event.player, event.game_id, event.player_score);
+              if (event.game_id !== undefined && event.cards !== undefined) {
+                await handleCurrentHand(event.game_id, event.cards);
               } else {
-                console.log('⚠️  Incomplete RoundScoreEvent - will not be processed');
+                console.log('⚠️  Incomplete CurrentHandEvent - will not be processed');
               }
             }
 
@@ -525,7 +524,7 @@ async function createWorker() {
     .withEntityModels([
       'jokers_of_neon_core-MissionCompletedEvent',
       'jokers_of_neon_core-CreateGameEvent',
-      'jokers_of_neon_core-RoundScoreEvent',
+      'jokers_of_neon_core-CurrentHandEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
       'jokers_of_neon_core-PlayGameOverEvent',
       'jokers_of_neon_core-LevelPassedEvent'
@@ -563,7 +562,7 @@ async function createWorker() {
   console.log('👂 Listening for events:');
   console.log('   - MissionCompletedEvent');
   console.log('   - CreateGameEvent');
-  console.log('   - RoundScoreEvent');
+  console.log('   - CurrentHandEvent');
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
   console.log('   - LevelPassedEvent\n');
