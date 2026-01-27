@@ -1,16 +1,13 @@
 import { env } from '../env.js';
-import { LeaderboardEntry, LeaderboardGraphQLResponse } from '../types/leaderboard.js';
+import { LeaderboardEntry, LeaderboardGraphQLResponse, GameIdRange, GameIdRangeResponse } from '../types/leaderboard.js';
 
 /**
- * GraphQL query for fetching leaderboard data
- * TODO: Currently uses startCountingAtGameId for all periods.
- * Future enhancement: implement period-based filtering (daily/weekly)
- * by calculating appropriate ID ranges based on timestamps.
+ * GraphQL query for fetching leaderboard data within a game ID range
  */
 const LEADERBOARD_QUERY = `
-  query ($isTournament: Boolean!, $startCountingAtGameId: Int!, $limit: Int!) {
+  query ($isTournament: Boolean!, $startGameId: Int!, $endGameId: Int!, $limit: Int!) {
     JokersOfNeonProfile20GameDataModels(
-      where: { is_tournament: $isTournament, idGT: $startCountingAtGameId }
+      where: { is_tournament: $isTournament, idGT: $startGameId, idLTE: $endGameId }
       first: $limit
       order: { field: "LEVEL", direction: "DESC" }
     ) {
@@ -31,20 +28,74 @@ const LEADERBOARD_QUERY = `
 
 export class LeaderboardService {
   private graphqlUrl: string;
-  private startCountingAtGameId: number;
+  private statsApiUrl: string;
+  private statsApiKey: string;
 
   constructor() {
     this.graphqlUrl = env.LEADERBOARD_GRAPHQL_URL;
-    this.startCountingAtGameId = env.START_COUNTING_AT_GAME_ID;
+    this.statsApiUrl = env.GAME_STATS_API_URL;
+    this.statsApiKey = env.GAME_STATS_API_KEY;
   }
 
   /**
-   * Fetches leaderboard data from the GraphQL endpoint
+   * Fetches the game ID range for a date range from the stats API
+   * The day starts at 6am UTC (3am Argentina time)
+   */
+  async fetchGameIdRange(startDate: string, endDate: string): Promise<GameIdRange | null> {
+    if (!this.statsApiUrl || !this.statsApiKey) {
+      console.error('❌ Game Stats API not configured (GAME_STATS_API_URL, GAME_STATS_API_KEY)');
+      return null;
+    }
+
+    const url = `${this.statsApiUrl}/api/stats/game-id-range?start_date=${startDate}&end_date=${endDate}`;
+    console.log(`📊 Fetching game ID range from ${url}`);
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'X-API-Key': this.statsApiKey,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Stats API request failed: ${response.status} ${response.statusText}`);
+      }
+
+      const result = await response.json() as GameIdRangeResponse;
+
+      if (!result.success || !result.data) {
+        console.error('❌ Stats API returned unsuccessful response');
+        return null;
+      }
+
+      const range: GameIdRange = {
+        startGameId: parseInt(result.data.start_game_id),
+        endGameId: parseInt(result.data.end_game_id),
+      };
+
+      console.log(`✅ Game ID range: ${range.startGameId} - ${range.endGameId}`);
+      console.log(`   Date range: ${result.data.date_range.start} to ${result.data.date_range.end}`);
+
+      return range;
+    } catch (error) {
+      console.error('❌ Error fetching game ID range:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Fetches leaderboard data from the GraphQL endpoint for a specific game ID range
    * Adds position field based on order (1-indexed)
    */
-  async fetchLeaderboard(limit: number, isTournament: boolean = false): Promise<LeaderboardEntry[]> {
+  async fetchLeaderboard(
+    limit: number,
+    gameIdRange: GameIdRange,
+    isTournament: boolean = false
+  ): Promise<LeaderboardEntry[]> {
     console.log(`📊 Fetching leaderboard from ${this.graphqlUrl}`);
-    console.log(`   Limit: ${limit}, Tournament: ${isTournament}, StartId: ${this.startCountingAtGameId}`);
+    console.log(`   Limit: ${limit}, Tournament: ${isTournament}`);
+    console.log(`   Game ID range: ${gameIdRange.startGameId} - ${gameIdRange.endGameId}`);
 
     try {
       const response = await fetch(this.graphqlUrl, {
@@ -56,7 +107,8 @@ export class LeaderboardService {
           query: LEADERBOARD_QUERY,
           variables: {
             isTournament,
-            startCountingAtGameId: this.startCountingAtGameId,
+            startGameId: gameIdRange.startGameId,
+            endGameId: gameIdRange.endGameId,
             limit,
           },
         }),
@@ -95,10 +147,22 @@ export class LeaderboardService {
   }
 
   /**
-   * Fetches top N players for a specific ranking period
+   * Fetches top N players for a specific date range
    */
-  async fetchTopPlayers(maxPosition: number): Promise<LeaderboardEntry[]> {
-    return this.fetchLeaderboard(maxPosition, false);
+  async fetchTopPlayersForDateRange(
+    maxPosition: number,
+    startDate: string,
+    endDate: string
+  ): Promise<LeaderboardEntry[]> {
+    // Get game ID range for the date range
+    const gameIdRange = await this.fetchGameIdRange(startDate, endDate);
+
+    if (!gameIdRange) {
+      console.error('❌ Could not fetch game ID range');
+      return [];
+    }
+
+    return this.fetchLeaderboard(maxPosition, gameIdRange, false);
   }
 }
 

@@ -125,50 +125,28 @@ CREATE POLICY "Allow all operations on game steps"
 
 -- ============================================================================
 -- Leaderboard Reward Periods Table
--- Tracks completed distribution periods to prevent duplicates
+-- Stores completed distribution periods with ranking and rewards data
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS leaderboard_reward_periods (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   period_type TEXT NOT NULL CHECK (period_type IN ('daily', 'weekly')),
   period_id TEXT NOT NULL, -- YYYY-MM-DD for daily, YYYY-WNN for weekly
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-  total_players INTEGER DEFAULT 0,
-  total_packs_distributed INTEGER DEFAULT 0,
-  started_at TIMESTAMP WITH TIME ZONE,
-  completed_at TIMESTAMP WITH TIME ZONE,
-  error_message TEXT,
+  rewards_data JSONB NOT NULL, -- Array of { position, player_address, player_name, level, score, packs: [packId, ...] }
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   CONSTRAINT unique_period UNIQUE (period_type, period_id)
 );
 
 -- Index for faster queries on period_type and period_id
 CREATE INDEX IF NOT EXISTS idx_leaderboard_reward_periods_type_id ON leaderboard_reward_periods(period_type, period_id);
 
--- Index for faster queries on status
-CREATE INDEX IF NOT EXISTS idx_leaderboard_reward_periods_status ON leaderboard_reward_periods(status);
-
--- Trigger to update updated_at on every update
-DROP TRIGGER IF EXISTS update_leaderboard_reward_periods_updated_at ON leaderboard_reward_periods;
-CREATE TRIGGER update_leaderboard_reward_periods_updated_at
-  BEFORE UPDATE ON leaderboard_reward_periods
-  FOR EACH ROW
-  EXECUTE FUNCTION update_updated_at_column();
-
 -- Comments for documentation
-COMMENT ON TABLE leaderboard_reward_periods IS 'Tracks completed leaderboard reward distribution periods to prevent duplicates';
+COMMENT ON TABLE leaderboard_reward_periods IS 'Stores completed leaderboard reward distributions with ranking and pack data';
 COMMENT ON COLUMN leaderboard_reward_periods.id IS 'Unique identifier (UUID)';
 COMMENT ON COLUMN leaderboard_reward_periods.period_type IS 'Type of period: daily or weekly';
 COMMENT ON COLUMN leaderboard_reward_periods.period_id IS 'Period identifier: YYYY-MM-DD for daily, YYYY-WNN for weekly';
-COMMENT ON COLUMN leaderboard_reward_periods.status IS 'Current status: pending, processing, completed, or failed';
-COMMENT ON COLUMN leaderboard_reward_periods.total_players IS 'Number of players who received rewards';
-COMMENT ON COLUMN leaderboard_reward_periods.total_packs_distributed IS 'Total number of packs distributed';
-COMMENT ON COLUMN leaderboard_reward_periods.started_at IS 'When the distribution started';
-COMMENT ON COLUMN leaderboard_reward_periods.completed_at IS 'When the distribution completed or failed';
-COMMENT ON COLUMN leaderboard_reward_periods.error_message IS 'Error message if distribution failed';
-COMMENT ON COLUMN leaderboard_reward_periods.created_at IS 'When the record was created';
-COMMENT ON COLUMN leaderboard_reward_periods.updated_at IS 'Last update timestamp';
+COMMENT ON COLUMN leaderboard_reward_periods.rewards_data IS 'JSON array with ranking and rewards: [{ position, player_address, player_name, level, score, packs }]';
+COMMENT ON COLUMN leaderboard_reward_periods.created_at IS 'When the distribution was recorded';
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE leaderboard_reward_periods ENABLE ROW LEVEL SECURITY;

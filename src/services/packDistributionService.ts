@@ -5,16 +5,13 @@ import { getLeaderboardService } from './leaderboardService.js';
 import { getRewardsConfig, getRewardsForPosition } from '../config/rewardsConfig.js';
 import { PeriodType, LeaderboardEntry } from '../types/leaderboard.js';
 
-interface PeriodRecord {
-  id: string;
-  period_type: PeriodType;
-  period_id: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  total_players: number;
-  total_packs_distributed: number;
-  started_at: string | null;
-  completed_at: string | null;
-  error_message: string | null;
+interface PlayerRewardData {
+  position: number;
+  player_address: string;
+  player_name: string;
+  level: number;
+  score: number;
+  packs: number[]; // Array of pack IDs distributed
 }
 
 export class PackDistributionService {
@@ -60,6 +57,51 @@ export class PackDistributionService {
   }
 
   /**
+   * Get the date range for a period
+   * The day boundary is at 6am UTC (3am Argentina time)
+   * Returns { startDate, endDate } in YYYY-MM-DD format
+   */
+  getDateRangeForPeriod(type: PeriodType): { startDate: string; endDate: string } {
+    const now = new Date();
+
+    if (type === 'daily') {
+      // Yesterday's day: from yesterday to today (6am UTC boundaries)
+      const yesterday = new Date(now);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+
+      const startDate = this.formatDate(yesterday);
+      const endDate = this.formatDate(now);
+
+      return { startDate, endDate };
+    } else {
+      // Last week: Monday to Monday
+      // Find last Monday (the end of the period we're distributing for)
+      const lastMonday = new Date(now);
+      const daysSinceMonday = (lastMonday.getUTCDay() + 6) % 7; // Days since last Monday
+      lastMonday.setUTCDate(lastMonday.getUTCDate() - daysSinceMonday);
+
+      // The Monday before that is the start
+      const startMonday = new Date(lastMonday);
+      startMonday.setUTCDate(startMonday.getUTCDate() - 7);
+
+      const startDate = this.formatDate(startMonday);
+      const endDate = this.formatDate(lastMonday);
+
+      return { startDate, endDate };
+    }
+  }
+
+  /**
+   * Format a date as YYYY-MM-DD
+   */
+  private formatDate(date: Date): string {
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  /**
    * Calculate ISO week number
    */
   private getISOWeekNumber(date: Date): number {
@@ -77,7 +119,7 @@ export class PackDistributionService {
     try {
       const { data, error } = await supabase
         .from('leaderboard_reward_periods')
-        .select('id, status')
+        .select('id')
         .eq('period_type', type)
         .eq('period_id', periodId)
         .single();
@@ -87,8 +129,8 @@ export class PackDistributionService {
         throw error;
       }
 
-      // Period is processed if it exists and is completed
-      return data?.status === 'completed';
+      // Period is processed if record exists
+      return !!data;
     } catch (error) {
       console.error('❌ Error checking period status:', error);
       return false;
@@ -96,87 +138,30 @@ export class PackDistributionService {
   }
 
   /**
-   * Create or get existing period record
+   * Save the period rewards data
    */
-  private async getOrCreatePeriodRecord(type: PeriodType, periodId: string): Promise<PeriodRecord | null> {
+  private async savePeriodRewards(
+    type: PeriodType,
+    periodId: string,
+    rewardsData: PlayerRewardData[]
+  ): Promise<void> {
     try {
-      // Try to get existing record
-      const { data: existing, error: fetchError } = await supabase
-        .from('leaderboard_reward_periods')
-        .select('*')
-        .eq('period_type', type)
-        .eq('period_id', periodId)
-        .single();
-
-      if (existing) {
-        return existing;
-      }
-
-      // Create new record
-      const { data: created, error: insertError } = await supabase
+      const { error } = await supabase
         .from('leaderboard_reward_periods')
         .insert({
           period_type: type,
           period_id: periodId,
-          status: 'pending',
-          total_players: 0,
-          total_packs_distributed: 0,
-        })
-        .select()
-        .single();
-
-      if (insertError) {
-        throw insertError;
-      }
-
-      return created;
-    } catch (error) {
-      console.error('❌ Error creating period record:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Update period record status
-   */
-  private async updatePeriodStatus(
-    id: string,
-    status: 'processing' | 'completed' | 'failed',
-    extra?: { totalPlayers?: number; totalPacksDistributed?: number; errorMessage?: string }
-  ): Promise<void> {
-    try {
-      const updateData: Record<string, any> = { status };
-
-      if (status === 'processing') {
-        updateData.started_at = new Date().toISOString();
-      }
-
-      if (status === 'completed' || status === 'failed') {
-        updateData.completed_at = new Date().toISOString();
-      }
-
-      if (extra?.totalPlayers !== undefined) {
-        updateData.total_players = extra.totalPlayers;
-      }
-
-      if (extra?.totalPacksDistributed !== undefined) {
-        updateData.total_packs_distributed = extra.totalPacksDistributed;
-      }
-
-      if (extra?.errorMessage) {
-        updateData.error_message = extra.errorMessage;
-      }
-
-      const { error } = await supabase
-        .from('leaderboard_reward_periods')
-        .update(updateData)
-        .eq('id', id);
+          rewards_data: rewardsData,
+        });
 
       if (error) {
         throw error;
       }
+
+      console.log(`✅ Period rewards saved to database`);
     } catch (error) {
-      console.error('❌ Error updating period status:', error);
+      console.error('❌ Error saving period rewards:', error);
+      throw error;
     }
   }
 
@@ -239,34 +224,29 @@ export class PackDistributionService {
       return true;
     }
 
-    // Create or get period record
-    const periodRecord = await this.getOrCreatePeriodRecord(periodType, periodKey);
-    if (!periodRecord) {
-      console.error('❌ Failed to create period record');
-      return false;
-    }
-
-    // Mark as processing
-    await this.updatePeriodStatus(periodRecord.id, 'processing');
-
     try {
+      // Get date range for this period
+      const { startDate, endDate } = this.getDateRangeForPeriod(periodType);
+      console.log(`📅 Date range: ${startDate} to ${endDate}`);
+
       // Fetch leaderboard
       console.log(`📊 Fetching top ${config.maxPosition} players...`);
-      const players = await this.leaderboardService.fetchTopPlayers(config.maxPosition);
+      const players = await this.leaderboardService.fetchTopPlayersForDateRange(
+        config.maxPosition,
+        startDate,
+        endDate
+      );
 
       if (players.length === 0) {
         console.warn('⚠️  No players found in leaderboard');
-        await this.updatePeriodStatus(periodRecord.id, 'completed', {
-          totalPlayers: 0,
-          totalPacksDistributed: 0,
-        });
+        // Save empty rewards data
+        await this.savePeriodRewards(periodType, periodKey, []);
         return true;
       }
 
       console.log(`📊 Found ${players.length} players in leaderboard`);
 
-      let totalPacksDistributed = 0;
-      let playersRewarded = 0;
+      const rewardsData: PlayerRewardData[] = [];
 
       // Distribute rewards to each eligible player
       for (const player of players) {
@@ -278,36 +258,42 @@ export class PackDistributionService {
         console.log(`\n👤 Player #${player.position}: ${player.player_name}`);
         console.log(`   Level: ${player.level}, Score: ${player.player_score}`);
 
+        const playerPacks: number[] = [];
+
         for (const reward of rewards) {
           // Distribute each pack in the reward
           for (let i = 0; i < reward.quantity; i++) {
             const txId = await this.distributePackToPlayer(player, reward.packId);
 
             if (txId) {
-              totalPacksDistributed++;
+              playerPacks.push(reward.packId);
             }
           }
         }
 
-        playersRewarded++;
+        // Add to rewards data
+        rewardsData.push({
+          position: player.position,
+          player_address: player.owner,
+          player_name: player.player_name,
+          level: player.level,
+          score: player.player_score,
+          packs: playerPacks,
+        });
       }
 
-      // Mark as completed
-      await this.updatePeriodStatus(periodRecord.id, 'completed', {
-        totalPlayers: playersRewarded,
-        totalPacksDistributed,
-      });
+      // Save the period with all rewards data
+      await this.savePeriodRewards(periodType, periodKey, rewardsData);
 
+      const totalPacks = rewardsData.reduce((sum, p) => sum + p.packs.length, 0);
       console.log(`\n✅ Distribution completed!`);
-      console.log(`   Players rewarded: ${playersRewarded}`);
-      console.log(`   Total packs distributed: ${totalPacksDistributed}`);
+      console.log(`   Players rewarded: ${rewardsData.length}`);
+      console.log(`   Total packs distributed: ${totalPacks}`);
 
       return true;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`❌ Distribution failed:`, errorMessage);
-
-      await this.updatePeriodStatus(periodRecord.id, 'failed', { errorMessage });
       return false;
     }
   }

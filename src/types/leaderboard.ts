@@ -26,3 +26,20 @@ export interface LeaderboardGraphQLResponse {
     }>;
   };
 }
+
+export interface GameIdRangeResponse {
+  success: boolean;
+  data: {
+    start_game_id: string;
+    end_game_id: string;
+    date_range: {
+      start: string;
+      end: string;
+    };
+  };
+}
+
+export interface GameIdRange {
+  startGameId: number;
+  endGameId: number;
+}
