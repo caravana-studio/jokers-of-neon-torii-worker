@@ -12,7 +12,7 @@ export interface LeaderboardEntry {
 export type PeriodType = 'daily' | 'weekly';
 
 export interface LeaderboardGraphQLResponse {
-  JokersOfNeonProfile20GameDataModels: {
+  jokersOfNeonProfile20GameDataModels: {
     edges: Array<{
       node: {
         id: number;

@@ -29,13 +29,10 @@ export interface RankingConfig {
 export const REWARDS_CONFIG: RankingConfig[] = [
   {
     type: 'daily',
-    maxPosition: 5,
+    maxPosition: 2,
     positions: [
       { position: 1, rewards: [{ packId: 2, quantity: 2 }] },  // 2 ADVANCED
       { position: 2, rewards: [{ packId: 2, quantity: 1 }, { packId: 1, quantity: 1 }] },  // 1 ADVANCED + 1 BASIC
-      { position: 3, rewards: [{ packId: 1, quantity: 1 }] },  // 1 BASIC
-      { position: 4, rewards: [{ packId: 1, quantity: 1 }] },  // 1 BASIC
-      { position: 5, rewards: [{ packId: 1, quantity: 1 }] },  // 1 BASIC
     ]
   },
   {

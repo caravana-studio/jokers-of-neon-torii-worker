@@ -2,14 +2,29 @@ import { env } from '../env.js';
 import { LeaderboardEntry, LeaderboardGraphQLResponse, GameIdRange, GameIdRangeResponse } from '../types/leaderboard.js';
 
 /**
+ * Convert hex string to readable string
+ */
+function hexToString(hex: string): string {
+  if (!hex || !hex.startsWith('0x')) return hex;
+  try {
+    const hexString = hex.slice(2);
+    let result = '';
+    for (let i = 0; i < hexString.length; i += 2) {
+      result += String.fromCharCode(parseInt(hexString.substr(i, 2), 16));
+    }
+    return result;
+  } catch {
+    return hex;
+  }
+}
+
+/**
  * GraphQL query for fetching leaderboard data within a game ID range
  */
 const LEADERBOARD_QUERY = `
-  query ($isTournament: Boolean!, $startGameId: Int!, $endGameId: Int!, $limit: Int!) {
-    JokersOfNeonProfile20GameDataModels(
+  query ($isTournament: Boolean!, $startGameId: Int!, $endGameId: Int!) {
+    jokersOfNeonProfile20GameDataModels(
       where: { is_tournament: $isTournament, idGT: $startGameId, idLTE: $endGameId }
-      first: $limit
-      order: { field: "LEVEL", direction: "DESC" }
     ) {
       edges {
         node {
@@ -74,8 +89,12 @@ export class LeaderboardService {
         endGameId: parseInt(result.data.end_game_id),
       };
 
-      console.log(`✅ Game ID range: ${range.startGameId} - ${range.endGameId}`);
-      console.log(`   Date range: ${result.data.date_range.start} to ${result.data.date_range.end}`);
+      console.log('\n🎮 GAME IDs:');
+      console.log('─'.repeat(80));
+      console.log(`   Start Game ID: ${range.startGameId}`);
+      console.log(`   End Game ID:   ${range.endGameId}`);
+      console.log(`   Date range:    ${result.data.date_range.start} to ${result.data.date_range.end}`);
+      console.log('─'.repeat(80));
 
       return range;
     } catch (error) {
@@ -109,7 +128,6 @@ export class LeaderboardService {
             isTournament,
             startGameId: gameIdRange.startGameId,
             endGameId: gameIdRange.endGameId,
-            limit,
           },
         }),
       });
@@ -124,20 +142,49 @@ export class LeaderboardService {
         throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
       }
 
-      if (!result.data?.JokersOfNeonProfile20GameDataModels?.edges) {
+      if (!result.data?.jokersOfNeonProfile20GameDataModels?.edges) {
         console.warn('⚠️  No leaderboard data found');
         return [];
       }
 
-      // Map edges to LeaderboardEntry and add position
-      const entries: LeaderboardEntry[] = result.data.JokersOfNeonProfile20GameDataModels.edges.map(
-        (edge, index) => ({
+      // Map edges to LeaderboardEntry and convert player_name from hex
+      const rawEntries = result.data.jokersOfNeonProfile20GameDataModels.edges.map(
+        (edge) => ({
           ...edge.node,
-          position: index + 1, // 1-indexed position
+          player_name: hexToString(edge.node.player_name),
         })
       );
 
+      // Sort by level DESC, round DESC, player_score DESC
+      rawEntries.sort((a, b) => {
+        if (b.level !== a.level) return b.level - a.level;
+        if (b.round !== a.round) return b.round - a.round;
+        return b.player_score - a.player_score;
+      });
+
+      // Remove duplicates by owner (keep best result per player)
+      const seenOwners = new Set<string>();
+      const uniqueEntries = rawEntries.filter((entry) => {
+        if (seenOwners.has(entry.owner)) return false;
+        seenOwners.add(entry.owner);
+        return true;
+      });
+
+      // Apply limit and add position after sorting
+      const entries: LeaderboardEntry[] = uniqueEntries.slice(0, limit).map((entry, index) => ({
+        ...entry,
+        position: index + 1,
+      }));
+
       console.log(`✅ Fetched ${entries.length} leaderboard entries`);
+
+      // Log ranking
+      console.log('\n📋 RANKING:');
+      console.log('─'.repeat(80));
+      for (const entry of entries) {
+        console.log(`   #${entry.position} | ${entry.player_name} | Level: ${entry.level} | Round: ${entry.round} | Score: ${entry.player_score}`);
+      }
+      console.log('─'.repeat(80));
 
       return entries;
     } catch (error) {

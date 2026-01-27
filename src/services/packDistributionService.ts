@@ -10,6 +10,7 @@ interface PlayerRewardData {
   player_address: string;
   player_name: string;
   level: number;
+  round: number;
   score: number;
   packs: number[]; // Array of pack IDs distributed
 }
@@ -248,20 +249,16 @@ export class PackDistributionService {
 
       const rewardsData: PlayerRewardData[] = [];
 
-      // Distribute rewards to each eligible player
+      // Build rewards data for each eligible player
       for (const player of players) {
         if (!player.position) continue;
 
         const rewards = getRewardsForPosition(periodType, player.position);
         if (rewards.length === 0) continue;
 
-        console.log(`\n👤 Player #${player.position}: ${player.player_name}`);
-        console.log(`   Level: ${player.level}, Score: ${player.player_score}`);
-
         const playerPacks: number[] = [];
 
         for (const reward of rewards) {
-          // Distribute each pack in the reward
           for (let i = 0; i < reward.quantity; i++) {
             const txId = await this.distributePackToPlayer(player, reward.packId);
 
@@ -271,24 +268,40 @@ export class PackDistributionService {
           }
         }
 
-        // Add to rewards data
         rewardsData.push({
           position: player.position,
           player_address: player.owner,
           player_name: player.player_name,
           level: player.level,
+          round: player.round,
           score: player.player_score,
           packs: playerPacks,
         });
       }
 
+      // Log packs per player
+      console.log('\n📦 PACKS POR JUGADOR:');
+      console.log('─'.repeat(80));
+      for (const data of rewardsData) {
+        console.log(`   #${data.position} | ${data.player_name} | Packs: [${data.packs.join(', ')}]`);
+      }
+      console.log('─'.repeat(80));
+
+      // Log what will be saved to DB
+      console.log('\n💾 DATOS A GUARDAR EN BD:');
+      console.log('─'.repeat(80));
+      console.log(`   period_type: "${periodType}"`);
+      console.log(`   period_id: "${periodKey}"`);
+      console.log(`   rewards_data: ${JSON.stringify(rewardsData, null, 2)}`);
+      console.log('─'.repeat(80));
+
       // Save the period with all rewards data
       await this.savePeriodRewards(periodType, periodKey, rewardsData);
 
       const totalPacks = rewardsData.reduce((sum, p) => sum + p.packs.length, 0);
-      console.log(`\n✅ Distribution completed!`);
+      console.log(`\n✅ Distribution completed (DRY RUN)`);
       console.log(`   Players rewarded: ${rewardsData.length}`);
-      console.log(`   Total packs distributed: ${totalPacks}`);
+      console.log(`   Total packs: ${totalPacks}`);
 
       return true;
     } catch (error) {
