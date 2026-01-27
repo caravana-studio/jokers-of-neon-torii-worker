@@ -89,13 +89,6 @@ export class LeaderboardService {
         endGameId: parseInt(result.data.end_game_id),
       };
 
-      console.log('\n🎮 GAME IDs:');
-      console.log('─'.repeat(80));
-      console.log(`   Start Game ID: ${range.startGameId}`);
-      console.log(`   End Game ID:   ${range.endGameId}`);
-      console.log(`   Date range:    ${result.data.date_range.start} to ${result.data.date_range.end}`);
-      console.log('─'.repeat(80));
-
       return range;
     } catch (error) {
       console.error('❌ Error fetching game ID range:', error);
@@ -177,14 +170,6 @@ export class LeaderboardService {
       }));
 
       console.log(`✅ Fetched ${entries.length} leaderboard entries`);
-
-      // Log ranking
-      console.log('\n📋 RANKING:');
-      console.log('─'.repeat(80));
-      for (const entry of entries) {
-        console.log(`   #${entry.position} | ${entry.player_name} | Level: ${entry.level} | Round: ${entry.round} | Score: ${entry.player_score}`);
-      }
-      console.log('─'.repeat(80));
 
       return entries;
     } catch (error) {

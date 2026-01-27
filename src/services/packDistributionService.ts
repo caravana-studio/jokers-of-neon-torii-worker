@@ -279,22 +279,6 @@ export class PackDistributionService {
         });
       }
 
-      // Log packs per player
-      console.log('\n📦 PACKS POR JUGADOR:');
-      console.log('─'.repeat(80));
-      for (const data of rewardsData) {
-        console.log(`   #${data.position} | ${data.player_name} | Packs: [${data.packs.join(', ')}]`);
-      }
-      console.log('─'.repeat(80));
-
-      // Log what will be saved to DB
-      console.log('\n💾 DATOS A GUARDAR EN BD:');
-      console.log('─'.repeat(80));
-      console.log(`   period_type: "${periodType}"`);
-      console.log(`   period_id: "${periodKey}"`);
-      console.log(`   rewards_data: ${JSON.stringify(rewardsData, null, 2)}`);
-      console.log('─'.repeat(80));
-
       // Save the period with all rewards data
       await this.savePeriodRewards(periodType, periodKey, rewardsData);
 
