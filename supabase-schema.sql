@@ -122,3 +122,39 @@ CREATE POLICY "Allow all operations on game steps"
   FOR ALL
   USING (true)
   WITH CHECK (true);
+
+-- ============================================================================
+-- Leaderboard Reward Periods Table
+-- Stores completed distribution periods with ranking and rewards data
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS leaderboard_reward_periods (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  period_type TEXT NOT NULL CHECK (period_type IN ('daily', 'weekly')),
+  period_id TEXT NOT NULL, -- YYYY-MM-DD for daily, YYYY-WNN for weekly
+  rewards_data JSONB NOT NULL, -- Array of { position, player_address, player_name, level, score, packs: [packId, ...] }
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  CONSTRAINT unique_period UNIQUE (period_type, period_id)
+);
+
+-- Index for faster queries on period_type and period_id
+CREATE INDEX IF NOT EXISTS idx_leaderboard_reward_periods_type_id ON leaderboard_reward_periods(period_type, period_id);
+
+-- Comments for documentation
+COMMENT ON TABLE leaderboard_reward_periods IS 'Stores completed leaderboard reward distributions with ranking and pack data';
+COMMENT ON COLUMN leaderboard_reward_periods.id IS 'Unique identifier (UUID)';
+COMMENT ON COLUMN leaderboard_reward_periods.period_type IS 'Type of period: daily or weekly';
+COMMENT ON COLUMN leaderboard_reward_periods.period_id IS 'Period identifier: YYYY-MM-DD for daily, YYYY-WNN for weekly';
+COMMENT ON COLUMN leaderboard_reward_periods.rewards_data IS 'JSON array with ranking and rewards: [{ position, player_address, player_name, level, score, packs }]';
+COMMENT ON COLUMN leaderboard_reward_periods.created_at IS 'When the distribution was recorded';
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE leaderboard_reward_periods ENABLE ROW LEVEL SECURITY;
+
+-- Policy: Allow all operations with anon key (for the worker)
+CREATE POLICY "Allow all operations on leaderboard reward periods"
+  ON leaderboard_reward_periods
+  FOR ALL
+  USING (true)
+  WITH CHECK (true);
+

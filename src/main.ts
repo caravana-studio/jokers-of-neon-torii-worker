@@ -6,6 +6,7 @@ import { dojoConfig } from './dojoConfig.js';
 import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata, buildRoundDataCalldata } from './starknetExecutor.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { fetchAndSaveGameStep, EmptyGameDataError } from './services/gameStepsService.js';
+import { getCronScheduler } from './cron/cronScheduler.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -15,6 +16,9 @@ global.WorkerGlobalScope = global;
 
 // Initialize transaction queue
 const txQueue = getTransactionQueue();
+
+// Initialize cron scheduler
+const cronScheduler = getCronScheduler();
 
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
@@ -347,6 +351,9 @@ async function createWorker() {
   await txQueue.initialize();
   console.log('');
 
+  // Start cron scheduler for pack distribution
+  cronScheduler.start();
+
   // Initialize SDK with example configuration
   const sdk = await init({
     client: {
@@ -572,6 +579,7 @@ async function createWorker() {
   process.on('SIGINT', () => {
     console.log('\n\n⏹️  Stopping listeners...');
     subscription.cancel();
+    cronScheduler.stop();
     process.exit(0);
   });
 }

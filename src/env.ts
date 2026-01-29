@@ -42,6 +42,14 @@ export const env = {
   // Si STARKNET_PRIVATE_KEY está configurado, ejecutará transacciones
   // Si no, solo escuchará eventos (modo solo lectura)
   READONLY_MODE: !process.env.STARKNET_PRIVATE_KEY,
+
+  // Pack Distribution Configuration
+  PACK_DISTRIBUTION_ENABLED: process.env.PACK_DISTRIBUTION_ENABLED === 'true',
+  LEADERBOARD_GRAPHQL_URL: process.env.LEADERBOARD_GRAPHQL_URL || 'https://api.cartridge.gg/x/mainnet-jokers-profile/torii/graphql',
+  GAME_STATS_API_URL: process.env.GAME_STATS_API_URL || '',
+  GAME_STATS_API_KEY: process.env.GAME_STATS_API_KEY || '',
+  DAILY_CRON_SCHEDULE: process.env.DAILY_CRON_SCHEDULE || '5 6 * * *',   // 06:05 UTC daily (after 6am UTC day boundary)
+  WEEKLY_CRON_SCHEDULE: process.env.WEEKLY_CRON_SCHEDULE || '10 6 * * 1', // 06:10 UTC every Monday
 };
 
 // Validar configuración requerida
