@@ -16,6 +16,7 @@ export const env = {
 
   // Starknet Configuration (Optional - for executing transactions)
   STARKNET_RPC_URL: process.env.STARKNET_RPC_URL || '',
+  STARKNET_RPC_API_KEY: process.env.STARKNET_RPC_API_KEY || '',
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || '',
 

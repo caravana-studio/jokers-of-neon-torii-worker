@@ -30,7 +30,9 @@ export async function executeStarknetTransaction(params: {
   // Crear provider de Starknet con configuración para usar 'latest' por defecto
   const provider = new RpcProvider({
     nodeUrl: env.STARKNET_RPC_URL,
-    default: true
+    headers: env.STARKNET_RPC_API_KEY
+      ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` }
+      : undefined,
   });
 
   // Crear cuenta desde private key
