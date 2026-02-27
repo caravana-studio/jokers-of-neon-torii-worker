@@ -293,7 +293,7 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
     txQueue.enqueue({
       contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_level_completion_xp',
-      calldata: [player, newLevel.toString()],
+      calldata: [player, previousLevel.toString()],
     });
 
     console.log('✅ Level completion XP transaction queued successfully\n');

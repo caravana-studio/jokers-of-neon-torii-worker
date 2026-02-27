@@ -12,6 +12,7 @@ export enum EventTypeEnum {
 	AcumCash,
 	AcumPoint,
 	AcumMulti,
+	Rank,
   }
 
 export enum GameStateEnum {
