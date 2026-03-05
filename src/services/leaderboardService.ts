@@ -20,11 +20,15 @@ function hexToString(hex: string): string {
 
 /**
  * GraphQL query for fetching leaderboard data within a game ID range
+ * Uses pagination with cursor to fetch all results
  */
 const LEADERBOARD_QUERY = `
-  query ($isTournament: Boolean!, $startGameId: Int!, $endGameId: Int!) {
+  query ($isTournament: Boolean!, $startGameId: Int!, $endGameId: Int!, $after: String) {
     jokersOfNeonProfile20GameDataModels(
       where: { is_tournament: $isTournament, idGT: $startGameId, idLTE: $endGameId }
+      first: 100
+      order: { field: "LEVEL", direction: "DESC" }
+      after: $after
     ) {
       edges {
         node {
@@ -36,6 +40,11 @@ const LEADERBOARD_QUERY = `
           is_tournament
           owner
         }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
       }
     }
   }
@@ -110,46 +119,68 @@ export class LeaderboardService {
     console.log(`   Game ID range: ${gameIdRange.startGameId} - ${gameIdRange.endGameId}`);
 
     try {
-      const response = await fetch(this.graphqlUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: LEADERBOARD_QUERY,
-          variables: {
-            isTournament,
-            startGameId: gameIdRange.startGameId,
-            endGameId: gameIdRange.endGameId,
+      // Paginate through all results
+      const allRawEntries: Array<Omit<LeaderboardEntry, 'position'>> = [];
+      let afterCursor: string | null = null;
+      let page = 0;
+
+      while (true) {
+        page++;
+        const response = await fetch(this.graphqlUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        }),
-      });
+          body: JSON.stringify({
+            query: LEADERBOARD_QUERY,
+            variables: {
+              isTournament,
+              startGameId: gameIdRange.startGameId,
+              endGameId: gameIdRange.endGameId,
+              after: afterCursor,
+            },
+          }),
+        });
 
-      if (!response.ok) {
-        throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+        if (!response.ok) {
+          throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+        }
+
+        const result = await response.json() as { data?: LeaderboardGraphQLResponse; errors?: any[] };
+
+        if (result.errors && result.errors.length > 0) {
+          throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
+        }
+
+        const models = result.data?.jokersOfNeonProfile20GameDataModels;
+        if (!models?.edges || models.edges.length === 0) {
+          if (page === 1) {
+            console.warn('⚠️  No leaderboard data found');
+          }
+          break;
+        }
+
+        const pageEntries = models.edges.map((edge) => ({
+          ...edge.node,
+          player_name: hexToString(edge.node.player_name),
+        }));
+        allRawEntries.push(...pageEntries);
+
+        console.log(`   Page ${page}: fetched ${pageEntries.length} entries (total: ${allRawEntries.length})`);
+
+        // Check if there are more pages
+        if (!models.pageInfo?.hasNextPage) {
+          break;
+        }
+        afterCursor = models.pageInfo.endCursor;
       }
 
-      const result = await response.json() as { data?: LeaderboardGraphQLResponse; errors?: any[] };
-
-      if (result.errors && result.errors.length > 0) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
-      }
-
-      if (!result.data?.jokersOfNeonProfile20GameDataModels?.edges) {
-        console.warn('⚠️  No leaderboard data found');
+      if (allRawEntries.length === 0) {
         return [];
       }
 
-      // Map edges to LeaderboardEntry and convert player_name from hex
-      const rawEntries = result.data.jokersOfNeonProfile20GameDataModels.edges.map(
-        (edge) => ({
-          ...edge.node,
-          player_name: hexToString(edge.node.player_name),
-        })
-      );
-
       // Sort by level DESC, round DESC, player_score DESC
-      rawEntries.sort((a, b) => {
+      allRawEntries.sort((a, b) => {
         if (b.level !== a.level) return b.level - a.level;
         if (b.round !== a.round) return b.round - a.round;
         return b.player_score - a.player_score;
@@ -157,7 +188,7 @@ export class LeaderboardService {
 
       // Remove duplicates by owner (keep best result per player)
       const seenOwners = new Set<string>();
-      const uniqueEntries = rawEntries.filter((entry) => {
+      const uniqueEntries = allRawEntries.filter((entry) => {
         if (seenOwners.has(entry.owner)) return false;
         seenOwners.add(entry.owner);
         return true;
@@ -169,7 +200,7 @@ export class LeaderboardService {
         position: index + 1,
       }));
 
-      console.log(`✅ Fetched ${entries.length} leaderboard entries`);
+      console.log(`✅ Fetched ${entries.length} leaderboard entries (from ${allRawEntries.length} total games)`);
 
       return entries;
     } catch (error) {

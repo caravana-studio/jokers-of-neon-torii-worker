@@ -23,7 +23,12 @@ export interface LeaderboardGraphQLResponse {
         owner: string;
         is_tournament: boolean;
       };
+      cursor: string;
     }>;
+    pageInfo?: {
+      hasNextPage: boolean;
+      endCursor: string;
+    };
   };
 }
 
