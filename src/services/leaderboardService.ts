@@ -118,14 +118,19 @@ export class LeaderboardService {
     console.log(`   Limit: ${limit}, Tournament: ${isTournament}`);
     console.log(`   Game ID range: ${gameIdRange.startGameId} - ${gameIdRange.endGameId}`);
 
+    const expectedMaxGames = gameIdRange.endGameId - gameIdRange.startGameId;
+    const maxEntries = expectedMaxGames * 2; // Safety cap: 2x expected games
+    console.log(`   Expected max games: ${expectedMaxGames}`);
+
     try {
-      // Paginate through all results
+      // Paginate through results
       const allRawEntries: Array<Omit<LeaderboardEntry, 'position'>> = [];
       let afterCursor: string | null = null;
       let page = 0;
 
       while (true) {
         page++;
+
         const response = await fetch(this.graphqlUrl, {
           method: 'POST',
           headers: {
@@ -167,6 +172,12 @@ export class LeaderboardService {
         allRawEntries.push(...pageEntries);
 
         console.log(`   Page ${page}: fetched ${pageEntries.length} entries (total: ${allRawEntries.length})`);
+
+        // Safety cap to prevent runaway pagination
+        if (allRawEntries.length >= maxEntries) {
+          console.warn(`⚠️  Reached safety cap (${maxEntries} entries). Expected ~${expectedMaxGames} games. Stopping pagination.`);
+          break;
+        }
 
         // Check if there are more pages
         if (!models.pageInfo?.hasNextPage) {
