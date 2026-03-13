@@ -7,6 +7,8 @@ import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, bu
 import { getTransactionQueue } from './transactionQueue.js';
 import { fetchAndSaveGameStep, EmptyGameDataError } from './services/gameStepsService.js';
 import { getCronScheduler } from './cron/cronScheduler.js';
+import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
+import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -22,9 +24,7 @@ const cronScheduler = getCronScheduler();
 
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
-console.log(`Torii URL:    ${env.TORII_URL}`);
-console.log(`Relay URL:    ${env.RELAY_URL}`);
-console.log(`World:        ${env.WORLD_ADDRESS}`);
+console.log(`Slot Env:     ${env.MANIFEST_SLOT_ENV}`);
 console.log('═'.repeat(60));
 console.log('');
 
@@ -104,9 +104,9 @@ async function handlePlayWinGame(player: string, gameId: number) {
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Check if Profile System and Game View are configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.GAME_VIEW_CONTRACT_ADDRESS) {
-      console.log('ℹ️  Profile System or Game View not configured (read-only mode)');
+    // Check if Profile System is configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS) {
+      console.log('ℹ️  Profile System not configured (read-only mode)');
       console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
@@ -163,9 +163,9 @@ async function handleGameOver(player: string, gameId: number) {
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Check if Profile System and Game View are configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY || !env.GAME_VIEW_CONTRACT_ADDRESS) {
-      console.log('ℹ️  Profile System or Game View not configured (read-only mode)');
+    // Check if Profile System is configured
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Profile System not configured (read-only mode)');
       console.log('✅ Event processed (without executing transaction)\n');
       return;
     }
@@ -345,6 +345,20 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
 
 // Create main worker
 async function createWorker() {
+  // Preload remote configs
+  console.log('🔌 Loading remote Slot config and manifest...\n');
+  await preloadSlotConfig();
+  await preloadSlotManifest();
+
+  const toriiUrl = getSlotToriiUrl();
+  const relayUrl = getSlotRelayUrl();
+  const worldAddress = getWorldAddress();
+
+  console.log(`Torii URL:    ${toriiUrl}`);
+  console.log(`Relay URL:    ${relayUrl}`);
+  console.log(`World:        ${worldAddress}`);
+  console.log('');
+
   console.log('🔌 Initializing Dojo SDK...\n');
 
   // Initialize transaction queue
@@ -357,9 +371,9 @@ async function createWorker() {
   // Initialize SDK with example configuration
   const sdk = await init({
     client: {
-      toriiUrl: env.TORII_URL,
-      relayUrl: env.RELAY_URL, // Must be in multiaddr format
-      worldAddress: env.WORLD_ADDRESS || dojoConfig.manifest.world.address,
+      toriiUrl,
+      relayUrl, // Must be in multiaddr format
+      worldAddress,
     },
     domain: {
       name: 'jokers-of-neon-worker',

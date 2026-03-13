@@ -9,10 +9,8 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: resolve(__dirname, '../.env') });
 
 export const env = {
-  // Dojo Configuration (Required)
-  TORII_URL: process.env.TORII_URL || '',
-  RELAY_URL: process.env.RELAY_URL || '',
-  WORLD_ADDRESS: process.env.WORLD_ADDRESS || '',
+  // Slot Environment (controls which slot instance and manifest to load)
+  MANIFEST_SLOT_ENV: process.env.MANIFEST_SLOT_ENV || 'dev',
 
   // Starknet Configuration (Optional - for executing transactions)
   STARKNET_RPC_URL: process.env.STARKNET_RPC_URL || '',
@@ -23,14 +21,8 @@ export const env = {
   // XP System Contract
   XP_SYSTEM_CONTRACT_ADDRESS: process.env.XP_SYSTEM_CONTRACT_ADDRESS || '',
 
-  // Game View Contract
-  GAME_VIEW_CONTRACT_ADDRESS: process.env.GAME_VIEW_CONTRACT_ADDRESS || '',
-
   // Profile System Contract
   PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
-
-  // Slot Network Configuration
-  SLOT_RPC_URL: process.env.SLOT_RPC_URL || '',
 
   // Supabase Configuration (for persistent transaction queue)
   SUPABASE_URL: process.env.SUPABASE_URL || '',
@@ -55,16 +47,9 @@ export const env = {
 
 // Validar configuración requerida
 function validateConfig() {
-  const required = ['TORII_URL', 'WORLD_ADDRESS'];
-  const missing = required.filter(key => !env[key as keyof typeof env]);
-
-  if (missing.length > 0) {
-    throw new Error(`❌ Faltan variables de entorno requeridas: ${missing.join(', ')}`);
-  }
-
   // Advertir si no está en modo solo lectura pero faltan configuraciones de Starknet
   if (!env.READONLY_MODE) {
-    const starknetRequired = ['STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'XP_SYSTEM_CONTRACT_ADDRESS', 'GAME_VIEW_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS'];
+    const starknetRequired = ['STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'XP_SYSTEM_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS'];
     const starknetMissing = starknetRequired.filter(key => !env[key as keyof typeof env]);
 
     if (starknetMissing.length > 0) {

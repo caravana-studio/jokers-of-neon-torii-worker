@@ -1,6 +1,8 @@
 import { Account, Call, RpcProvider } from 'starknet';
 import { env } from './env.js';
 import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
+import { getSlotRpcUrl } from './config/slotConfig.js';
+import { getSlotGameViewsAddress } from './config/manifest.js';
 
 /**
  * RoundData structure for set_round_data
@@ -82,16 +84,16 @@ export async function executeStarknetTransaction(params: {
 export async function getGameData(gameId: number): Promise<{ game: Game; round: Round }> {
   console.log(`\n📖 Consultando datos del juego ${gameId}...`);
 
-  // Usar SLOT_RPC_URL para el contrato GAME_VIEW que está desplegado en Slot
+  // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
-    nodeUrl: env.SLOT_RPC_URL,
+    nodeUrl: getSlotRpcUrl(),
     default: true
   });
 
   try {
     const result = await provider.callContract(
       {
-        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        contractAddress: getSlotGameViewsAddress(),
         entrypoint: 'get_game_data',
         calldata: [gameId.toString()]
       },
@@ -167,16 +169,16 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
 export async function getGameSpecials(gameId: number): Promise<number[]> {
   console.log(`\n📖 Consultando specials del juego ${gameId}...`);
 
-  // Usar SLOT_RPC_URL para el contrato GAME_VIEW que está desplegado en Slot
+  // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
-    nodeUrl: env.SLOT_RPC_URL,
+    nodeUrl: getSlotRpcUrl(),
     default: true
   });
 
   try {
     const result = await provider.callContract(
       {
-        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        contractAddress: getSlotGameViewsAddress(),
         entrypoint: 'get_special_cards',
         calldata: [gameId.toString()]
       },
@@ -255,16 +257,16 @@ export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
 export async function getPlayerStats(gameId: number): Promise<PlayerStats> {
   console.log(`\n📖 Consultando estadísticas del jugador para el juego ${gameId}...`);
 
-  // Usar SLOT_RPC_URL para el contrato GAME_VIEW que está desplegado en Slot
+  // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
-    nodeUrl: env.SLOT_RPC_URL,
+    nodeUrl: getSlotRpcUrl(),
     default: true
   });
 
   try {
     const result = await provider.callContract(
       {
-        contractAddress: env.GAME_VIEW_CONTRACT_ADDRESS,
+        contractAddress: getSlotGameViewsAddress(),
         entrypoint: 'get_player_stats',
         calldata: [gameId.toString()]
       },

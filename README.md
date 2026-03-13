@@ -27,10 +27,10 @@ bun install
 2. Edita `.env` con tu configuración:
 
 ```env
-# Requerido
-TORII_URL=https://api.cartridge.gg/x/jokers-pre-season/torii
-RELAY_URL=https://api.cartridge.gg/x/jokers-pre-season/torii
-WORLD_ADDRESS=0x...
+# Controla qué slot instance y manifest cargar (dev | mainnet)
+# Slot RPC, Torii URL, Relay URL, World Address y Game View contract
+# se resuelven dinámicamente desde version.json y manifest remoto.
+MANIFEST_SLOT_ENV=dev
 
 # Opcional (para ejecutar transacciones)
 STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
@@ -136,12 +136,12 @@ Presiona Ctrl+C para detener
 
 ## Troubleshooting
 
-### Error: "Faltan variables de entorno requeridas"
-Asegúrate de configurar `TORII_URL` y `WORLD_ADDRESS` en tu archivo `.env`.
+### Error: "Slot config not loaded" o "Manifest not loaded"
+Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el servicio pueda acceder a `jokersofneon.com` para cargar `version.json` y el manifest remoto.
 
 ### El bot no escucha eventos
-- Verifica que `TORII_URL` sea correcto
-- Verifica que `WORLD_ADDRESS` sea la dirección correcta del contrato World
+- Verifica que `MANIFEST_SLOT_ENV` apunte al entorno correcto (`dev` o `mainnet`)
+- Revisa los logs de startup para confirmar que Torii URL y World Address se resolvieron correctamente
 - Asegúrate de que el modelo de evento esté correctamente nombrado en el código
 
 ## Referencias
