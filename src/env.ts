@@ -24,6 +24,9 @@ export const env = {
   // Profile System Contract
   PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
 
+  // Progression System Contract (Profile World - for syncing progression from core events)
+  PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
+
   // Supabase Configuration (for persistent transaction queue)
   SUPABASE_URL: process.env.SUPABASE_URL || '',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',

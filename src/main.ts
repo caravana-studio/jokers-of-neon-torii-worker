@@ -273,6 +273,33 @@ async function handleCreateGame(player: string, gameId: number) {
 }
 
 /**
+ * Handles progression updated event
+ * Syncs player progression from Core (Slot) to Profile (Mainnet)
+ */
+async function handleProgressionUpdated(player: string, tier: number, totalRuns: number, maxLevel: number, maxRound: number) {
+  console.log(`\n🔄 Processing progression update for ${player}...`);
+  console.log(`   Tier: ${tier}, Total Runs: ${totalRuns}, Max Level: ${maxLevel}, Max Round: ${maxRound}`);
+
+  try {
+    if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Progression System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
+      return;
+    }
+
+    txQueue.enqueue({
+      contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'sync_progression',
+      calldata: [player, tier.toString(), totalRuns.toString(), maxLevel.toString(), maxRound.toString()],
+    });
+
+    console.log('✅ Progression sync transaction queued successfully\n');
+  } catch (error) {
+    console.error('❌ Error queueing progression sync transaction:', error);
+  }
+}
+
+/**
  * Handles level passed event
  */
 async function handleLevelPassed(player: string, gameId: number, previousLevel: number, newLevel: number) {
@@ -528,6 +555,33 @@ async function createWorker() {
               }
             }
 
+            // Check if ProgressionUpdatedEvent exists
+            if (coreModels.ProgressionUpdatedEvent) {
+              const event = coreModels.ProgressionUpdatedEvent;
+
+              console.log('\n📈 ProgressionUpdatedEvent found!');
+              console.log(`   Entity ID:     ${entityId}`);
+              console.log(`   Player:        ${event.player || 'N/A'}`);
+              console.log(`   Tier:          ${event.tier ?? 'N/A'}`);
+              console.log(`   Total Runs:    ${event.total_runs ?? 'N/A'}`);
+              console.log(`   Max Level:     ${event.max_level ?? 'N/A'}`);
+              console.log(`   Max Round:     ${event.max_round ?? 'N/A'}`);
+              console.log(`   Timestamp:     ${new Date().toISOString()}`);
+              console.log('─'.repeat(60));
+
+              if (event.player && event.tier !== undefined && event.total_runs !== undefined && event.max_level !== undefined && event.max_round !== undefined) {
+                await handleProgressionUpdated(
+                  event.player,
+                  Number(event.tier),
+                  Number(event.total_runs),
+                  Number(event.max_level),
+                  Number(event.max_round)
+                );
+              } else {
+                console.log('⚠️  Incomplete ProgressionUpdatedEvent - will not be processed');
+              }
+            }
+
             // If it's not one of the events we're interested in, silently ignore it
           }
         } catch (error) {
@@ -548,7 +602,8 @@ async function createWorker() {
       'jokers_of_neon_core-CurrentHandEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
       'jokers_of_neon_core-PlayGameOverEvent',
-      'jokers_of_neon_core-LevelPassedEvent'
+      'jokers_of_neon_core-LevelPassedEvent',
+      'jokers_of_neon_core-ProgressionUpdatedEvent'
     ])
     .withDirection('Backward')
     .withLimit(10);
@@ -586,7 +641,8 @@ async function createWorker() {
   console.log('   - CurrentHandEvent');
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
-  console.log('   - LevelPassedEvent\n');
+  console.log('   - LevelPassedEvent');
+  console.log('   - ProgressionUpdatedEvent\n');
   console.log('Press Ctrl+C to stop\n');
 
   // Keep the process alive
