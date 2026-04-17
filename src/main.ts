@@ -17,10 +17,10 @@ global.WebSocket = w3cwebsocket;
 global.WorkerGlobalScope = global;
 
 // Initialize transaction queue
-// const txQueue = getTransactionQueue();
+const txQueue = getTransactionQueue();
 
 // Initialize cron scheduler
-// const cronScheduler = getCronScheduler();
+const cronScheduler = getCronScheduler();
 
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
@@ -44,14 +44,14 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
       return;
     }
 
-    // // Add transaction to queue instead of executing directly
-    // txQueue.enqueue({
-    //   contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'add_daily_mission_xp',
-    //   calldata: [player, missionType],
-    // });
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
+      contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_daily_mission_xp',
+      calldata: [player, missionType],
+    });
 
-    console.log('✅ Daily mission XP event detected (dry run)\n');
+    console.log('✅ Daily mission XP transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error queueing daily mission XP transaction:', error);
   }
@@ -74,16 +74,15 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
       return;
     }
 
-    // // Fetch game data from API and save as a game step
-    // console.log('🔄 Fetching and saving game step...');
-    // const result = await fetchAndSaveGameStep(gameId);
+    // Fetch game data from API and save as a game step
+    console.log('🔄 Fetching and saving game step...');
+    const result = await fetchAndSaveGameStep(gameId);
 
-    // if (result) {
-    //   console.log(`✅ Game step saved successfully: step=${result.step}\n`);
-    // } else {
-    //   console.log('ℹ️  Game step not saved (Supabase not configured)\n');
-    // }
-    console.log('✅ CurrentHand event detected (dry run)\n');
+    if (result) {
+      console.log(`✅ Game step saved successfully: step=${result.step}\n`);
+    } else {
+      console.log('ℹ️  Game step not saved (Supabase not configured)\n');
+    }
   } catch (error) {
     if (error instanceof EmptyGameDataError) {
       // API returned empty data - this is not a critical error, just skip saving
@@ -112,21 +111,21 @@ async function handlePlayWinGame(player: string, gameId: number) {
       return;
     }
 
-    // // Get game data from Game View
-    // const { game, round } = await getGameData(gameId);
-    // const roundDataCalldata = buildRoundDataCalldata(game, round, player);
-    // await txQueue.enqueue({
-    //   contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'set_round_data',
-    //   calldata: roundDataCalldata,
-    // });
-    // const specials = await getGameSpecials(gameId);
-    // const gameDataCalldata = buildGameDataCalldata(game, specials);
-    // await txQueue.enqueue({
-    //   contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'set_game_data',
-    //   calldata: gameDataCalldata,
-    // });
+    // Get game data from Game View
+    const { game, round } = await getGameData(gameId);
+    const roundDataCalldata = buildRoundDataCalldata(game, round, player);
+    await txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_round_data',
+      calldata: roundDataCalldata,
+    });
+    const specials = await getGameSpecials(gameId);
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+    await txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
+    });
 
     console.log('✅ PlayWinGame event detected (dry run)\n');
   } catch (error) {
@@ -149,22 +148,22 @@ async function handleGameOver(player: string, gameId: number) {
       return;
     }
 
-    // // Get game data and queue transactions
-    // const { game } = await getGameData(gameId);
-    // const specials = await getGameSpecials(gameId);
-    // const gameDataCalldata = buildGameDataCalldata(game, specials);
-    // txQueue.enqueue({
-    //   contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'set_game_data',
-    //   calldata: gameDataCalldata,
-    // });
-    // const playerStats = await getPlayerStats(gameId);
-    // const playerStatsCalldata = buildPlayerStatsCalldata(player, playerStats);
-    // txQueue.enqueue({
-    //   contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'add_stats',
-    //   calldata: playerStatsCalldata,
-    // });
+    // Get game data and queue transactions
+    const { game } = await getGameData(gameId);
+    const specials = await getGameSpecials(gameId);
+    const gameDataCalldata = buildGameDataCalldata(game, specials);
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'set_game_data',
+      calldata: gameDataCalldata,
+    });
+    const playerStats = await getPlayerStats(gameId);
+    const playerStatsCalldata = buildPlayerStatsCalldata(player, playerStats);
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_stats',
+      calldata: playerStatsCalldata,
+    });
 
     console.log('✅ GameOver event detected (dry run)\n');
 
@@ -217,12 +216,12 @@ async function handleCreateGame(player: string, gameId: number) {
       '0'                    // burn_purchased
     ];
 
-    // // Add stats transaction to queue
-    // txQueue.enqueue({
-    //   contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'add_stats',
-    //   calldata: playerStatsCalldata,
-    // });
+    // Add stats transaction to queue
+    txQueue.enqueue({
+      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_stats',
+      calldata: playerStatsCalldata,
+    });
 
     console.log('✅ CreateGame event detected (dry run)\n');
   } catch (error) {
@@ -239,17 +238,17 @@ async function handleProgressionUpdated(player: string, tier: number, totalRuns:
   console.log(`   Tier: ${tier}, Total Runs: ${totalRuns}, Max Level: ${maxLevel}, Max Round: ${maxRound}`);
 
   try {
-    // if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-    //   console.log('ℹ️  Progression System not configured (read-only mode)');
-    //   console.log('✅ Event processed (without executing transaction)\n');
-    //   return;
-    // }
+    if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Progression System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
+      return;
+    }
 
-    // txQueue.enqueue({
-    //   contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'sync_progression',
-    //   calldata: [player, tier.toString(), totalRuns.toString(), maxLevel.toString(), maxRound.toString()],
-    // });
+    txQueue.enqueue({
+      contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'sync_progression',
+      calldata: [player, tier.toString(), totalRuns.toString(), maxLevel.toString(), maxRound.toString()],
+    });
 
     console.log('✅ Progression event detected successfully (dry run)\n');
   } catch (error) {
@@ -274,21 +273,21 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
       return;
     }
 
-    // // Add transaction to queue instead of executing directly
-    // txQueue.enqueue({
-    //   contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-    //   entrypoint: 'add_level_completion_xp',
-    //   calldata: [player, previousLevel.toString()],
-    // });
+    // Add transaction to queue instead of executing directly
+    txQueue.enqueue({
+      contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'add_level_completion_xp',
+      calldata: [player, previousLevel.toString()],
+    });
 
-    // if (newLevel === 4) {
-    //   const playerStatsCalldata = [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
-    //   txQueue.enqueue({
-    //     contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-    //     entrypoint: 'add_stats',
-    //     calldata: playerStatsCalldata,
-    //   });
-    // }
+    if (newLevel === 4) {
+      const playerStatsCalldata = [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
+      txQueue.enqueue({
+        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
+        entrypoint: 'add_stats',
+        calldata: playerStatsCalldata,
+      });
+    }
 
     console.log('✅ LevelPassed event detected (dry run)\n');
   } catch (error) {
@@ -315,11 +314,11 @@ async function createWorker() {
   console.log('🔌 Initializing Dojo SDK...\n');
 
   // Initialize transaction queue
-  // await txQueue.initialize();
-  // console.log('');
+  await txQueue.initialize();
+  console.log('');
 
   // Start cron scheduler for pack distribution
-  // cronScheduler.start();
+  cronScheduler.start();
 
   // Initialize SDK with example configuration
   const sdk = await init({
@@ -575,7 +574,7 @@ async function createWorker() {
   process.on('SIGINT', () => {
     console.log('\n\n⏹️  Stopping listeners...');
     subscription.cancel();
-    // cronScheduler.stop();
+    cronScheduler.stop();
     process.exit(0);
   });
 }
