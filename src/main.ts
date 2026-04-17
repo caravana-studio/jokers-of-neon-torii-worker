@@ -113,36 +113,14 @@ async function handlePlayWinGame(player: string, gameId: number) {
 
     // Get game data from Game View
     const { game, round } = await getGameData(gameId);
-    console.log(`📊 Game data retrieved:`);
-    console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
-    console.log(`   Round Score: ${round.current_score}/${round.target_score}`);
-    console.log(`   Rages: [${round.rages.join(', ')}]`);
-
-    // Save RoundData to Profile System
-    console.log('📝 Saving round data to Profile System...');
-
-    // Build calldata for RoundData
     const roundDataCalldata = buildRoundDataCalldata(game, round, player);
-
-    // Add transaction to queue
     await txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_round_data',
       calldata: roundDataCalldata,
     });
-
-    console.log('✅ Round data transaction queued successfully');
-
-    // Save GameData to Profile System
-    console.log('📝 Saving game data to Profile System...');
-
-    // Get game specials
     const specials = await getGameSpecials(gameId);
-
-    // Build calldata for GameData
     const gameDataCalldata = buildGameDataCalldata(game, specials);
-
-    // Add transaction to queue instead of executing directly
     await txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_game_data',
@@ -170,38 +148,17 @@ async function handleGameOver(player: string, gameId: number) {
       return;
     }
 
-    // Get game data from Game View
+    // Get game data and queue transactions
     const { game } = await getGameData(gameId);
-    console.log(`📊 Game data retrieved:`);
-    console.log(`   Level: ${game.level}, Score: ${game.player_score}`);
-
-    // Save GameData to Profile System
-    console.log('📝 Saving game data to Profile System...');
-
-    // Get game specials
     const specials = await getGameSpecials(gameId);
-
-    // Build calldata for GameData
     const gameDataCalldata = buildGameDataCalldata(game, specials);
-
-    // Add transaction to queue instead of executing directly
     txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'set_game_data',
       calldata: gameDataCalldata,
     });
-
-    console.log('✅ Game data transaction queued successfully\n');
-
-    // Get player stats from Game View
-    console.log('📊 Obtaining player stats from Game View...');
     const playerStats = await getPlayerStats(gameId);
-    console.log(`   Player Stats retrieved for ${playerStats.address}`);
-
-    // Build calldata for PlayerStats
     const playerStatsCalldata = buildPlayerStatsCalldata(player, playerStats);
-
-    // Add stats transaction to queue
     txQueue.enqueue({
       contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
       entrypoint: 'add_stats',
@@ -209,7 +166,6 @@ async function handleGameOver(player: string, gameId: number) {
     });
 
     console.log('✅ Player stats transaction queued successfully\n');
-
   } catch (error) {
     console.error('❌ Error recording game over:', error);
   }
@@ -273,6 +229,33 @@ async function handleCreateGame(player: string, gameId: number) {
 }
 
 /**
+ * Handles progression updated event
+ * Syncs player progression from Core (Slot) to Profile (Mainnet)
+ */
+async function handleProgressionUpdated(player: string, tier: number, totalRuns: number, maxLevel: number, maxRound: number) {
+  console.log(`\n🔄 Processing progression update for ${player}...`);
+  console.log(`   Tier: ${tier}, Total Runs: ${totalRuns}, Max Level: ${maxLevel}, Max Round: ${maxRound}`);
+
+  try {
+    if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+      console.log('ℹ️  Progression System not configured (read-only mode)');
+      console.log('✅ Event processed (without executing transaction)\n');
+      return;
+    }
+
+    txQueue.enqueue({
+      contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
+      entrypoint: 'sync_progression',
+      calldata: [player, tier.toString(), totalRuns.toString(), maxLevel.toString(), maxRound.toString()],
+    });
+
+    console.log('✅ Progression event detected successfully (dry run)\n');
+  } catch (error) {
+    console.error('❌ Error processing progression event:', error);
+  }
+}
+
+/**
  * Handles level passed event
  */
 async function handleLevelPassed(player: string, gameId: number, previousLevel: number, newLevel: number) {
@@ -296,48 +279,16 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
       calldata: [player, previousLevel.toString()],
     });
 
-    console.log('✅ Level completion XP transaction queued successfully\n');
-
-    // When player reaches level 4, record game won in stats
-    if (newLevel === 4) { //TODO: cambiar a 4
-      console.log('🏆 Player passed level 3 , recording game won in stats...');
-
-      // Create PlayerStats with only games_won = 1, rest = 0
-      const playerStatsCalldata = [
-        player,                // address
-        '0',                   // games_played
-        '1',                   // games_won
-        '0',                   // high_card_played
-        '0',                   // pair_played
-        '0',                   // two_pair_played
-        '0',                   // three_of_a_kind_played
-        '0',                   // four_of_a_kind_played
-        '0',                   // five_of_a_kind_played
-        '0',                   // full_house_played
-        '0',                   // flush_played
-        '0',                   // straight_played
-        '0',                   // straight_flush_played
-        '0',                   // royal_flush_played
-        '0',                   // loot_boxes_purchased
-        '0',                   // cards_purchased
-        '0',                   // specials_purchased
-        '0',                   // specials_sold
-        '0',                   // power_ups_purchased
-        '0',                   // level_ups_purchased
-        '0',                   // modifiers_purchased
-        '0',                   // rerolls_purchased
-        '0'                    // burn_purchased
-      ];
-
-      // Add stats transaction to queue
+    if (newLevel === 4) {
+      const playerStatsCalldata = [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
       txQueue.enqueue({
         contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
         entrypoint: 'add_stats',
         calldata: playerStatsCalldata,
       });
-
       console.log('✅ Game won stats transaction queued successfully\n');
     }
+    
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
   }
@@ -528,6 +479,33 @@ async function createWorker() {
               }
             }
 
+            // Check if ProgressionUpdatedEvent exists
+            if (coreModels.ProgressionUpdatedEvent) {
+              const event = coreModels.ProgressionUpdatedEvent;
+
+              console.log('\n📈 ProgressionUpdatedEvent found!');
+              console.log(`   Entity ID:     ${entityId}`);
+              console.log(`   Player:        ${event.player || 'N/A'}`);
+              console.log(`   Tier:          ${event.tier ?? 'N/A'}`);
+              console.log(`   Total Runs:    ${event.total_runs ?? 'N/A'}`);
+              console.log(`   Max Level:     ${event.max_level ?? 'N/A'}`);
+              console.log(`   Max Round:     ${event.max_round ?? 'N/A'}`);
+              console.log(`   Timestamp:     ${new Date().toISOString()}`);
+              console.log('─'.repeat(60));
+
+              if (event.player && event.tier !== undefined && event.total_runs !== undefined && event.max_level !== undefined && event.max_round !== undefined) {
+                await handleProgressionUpdated(
+                  event.player,
+                  Number(event.tier),
+                  Number(event.total_runs),
+                  Number(event.max_level),
+                  Number(event.max_round)
+                );
+              } else {
+                console.log('⚠️  Incomplete ProgressionUpdatedEvent - will not be processed');
+              }
+            }
+
             // If it's not one of the events we're interested in, silently ignore it
           }
         } catch (error) {
@@ -548,7 +526,8 @@ async function createWorker() {
       'jokers_of_neon_core-CurrentHandEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
       'jokers_of_neon_core-PlayGameOverEvent',
-      'jokers_of_neon_core-LevelPassedEvent'
+      'jokers_of_neon_core-LevelPassedEvent',
+      'jokers_of_neon_core-ProgressionUpdatedEvent'
     ])
     .withDirection('Backward')
     .withLimit(10);
@@ -586,7 +565,8 @@ async function createWorker() {
   console.log('   - CurrentHandEvent');
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
-  console.log('   - LevelPassedEvent\n');
+  console.log('   - LevelPassedEvent');
+  console.log('   - ProgressionUpdatedEvent\n');
   console.log('Press Ctrl+C to stop\n');
 
   // Keep the process alive
