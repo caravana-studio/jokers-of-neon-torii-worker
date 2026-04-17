@@ -127,7 +127,7 @@ async function handlePlayWinGame(player: string, gameId: number) {
       calldata: gameDataCalldata,
     });
 
-    console.log('✅ PlayWinGame event detected (dry run)\n');
+    console.log('✅ Game data transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error recording won game:', error);
   }
@@ -165,8 +165,7 @@ async function handleGameOver(player: string, gameId: number) {
       calldata: playerStatsCalldata,
     });
 
-    console.log('✅ GameOver event detected (dry run)\n');
-
+    console.log('✅ Player stats transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error recording game over:', error);
   }
@@ -223,7 +222,7 @@ async function handleCreateGame(player: string, gameId: number) {
       calldata: playerStatsCalldata,
     });
 
-    console.log('✅ CreateGame event detected (dry run)\n');
+    console.log('✅ Game played stats transaction queued successfully\n');
   } catch (error) {
     console.error('❌ Error recording game creation:', error);
   }
@@ -287,9 +286,9 @@ async function handleLevelPassed(player: string, gameId: number, previousLevel: 
         entrypoint: 'add_stats',
         calldata: playerStatsCalldata,
       });
+      console.log('✅ Game won stats transaction queued successfully\n');
     }
-
-    console.log('✅ LevelPassed event detected (dry run)\n');
+    
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
   }
