@@ -18,6 +18,14 @@ export const env = {
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || '',
 
+  // Celo / EVM Configuration (Optional - reserved for multi-chain execution)
+  CELO_RPC_URL: process.env.CELO_RPC_URL || '',
+  CELO_PRIVATE_KEY: process.env.CELO_PRIVATE_KEY || '',
+  CELO_ADDRESS: process.env.CELO_ADDRESS || '',
+  CELO_XP_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_XP_SYSTEM_CONTRACT_ADDRESS || '',
+  CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
+  CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
+
   // XP System Contract
   XP_SYSTEM_CONTRACT_ADDRESS: process.env.XP_SYSTEM_CONTRACT_ADDRESS || '',
 

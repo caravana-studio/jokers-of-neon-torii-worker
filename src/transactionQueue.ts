@@ -1,28 +1,13 @@
-import { Account, Call, RpcProvider } from 'starknet';
-import { env } from './env.js';
 import { supabase } from './config/supabase.js';
-
-/**
- * Transaction item to be queued
- */
-export interface QueuedTransaction {
-  id: string;
-  contractAddress: string;
-  entrypoint: string;
-  calldata: any[];
-  retries: number;
-  maxRetries: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-}
-
-/**
- * Result of a transaction execution
- */
-export interface TransactionResult {
-  success: boolean;
-  transactionHash?: string;
-  error?: Error;
-}
+import { env } from './env.js';
+import { executeQueuedTransaction } from './transactionExecutors/index.js';
+import {
+  isSupportedBlockchain,
+  type EnqueueTransactionParams,
+  type QueuedTransaction,
+  type TransactionResult,
+  type TransactionStatus,
+} from './transactionQueueTypes.js';
 
 /**
  * Persistent Transaction Queue Manager
@@ -31,24 +16,9 @@ export interface TransactionResult {
 export class TransactionQueue {
   private processing = false;
   private currentTransactionId: string | null = null;
-  private provider: RpcProvider;
-  private account: Account;
   private useSupabase: boolean;
 
   constructor() {
-    // Create provider
-    this.provider = new RpcProvider({
-      nodeUrl: env.STARKNET_RPC_URL,
-      default: true
-    });
-
-    // Create account
-    this.account = new Account({
-      provider: this.provider,
-      address: env.STARKNET_ADDRESS,
-      signer: env.STARKNET_PRIVATE_KEY,
-    });
-
     // Check if Supabase is configured
     this.useSupabase = !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 
@@ -121,17 +91,13 @@ export class TransactionQueue {
   /**
    * Add a transaction to the queue
    */
-  public async enqueue(params: {
-    contractAddress: string;
-    entrypoint: string;
-    calldata: any[];
-    maxRetries?: number;
-  }): Promise<string> {
+  public async enqueue(params: EnqueueTransactionParams): Promise<string> {
     const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const maxRetries = params.maxRetries ?? 3;
 
     console.log(`\n📥 Adding transaction to queue`);
     console.log(`   ID:         ${id}`);
+    console.log(`   Blockchain: ${params.blockchain}`);
     console.log(`   Contract:   ${params.contractAddress}`);
     console.log(`   Entrypoint: ${params.entrypoint}`);
 
@@ -142,6 +108,7 @@ export class TransactionQueue {
           .from('torii_worker_transaction_queue')
           .insert({
             id,
+            blockchain: params.blockchain,
             contract_address: params.contractAddress,
             entrypoint: params.entrypoint,
             calldata: params.calldata,
@@ -197,6 +164,7 @@ export class TransactionQueue {
 
       console.log(`\n⚙️  Processing transaction from queue`);
       console.log(`   ID:         ${transaction.id}`);
+      console.log(`   Blockchain: ${transaction.blockchain}`);
       console.log(`   Contract:   ${transaction.contractAddress}`);
       console.log(`   Entrypoint: ${transaction.entrypoint}`);
       console.log(`   Attempt:    ${transaction.retries + 1}/${transaction.maxRetries + 1}`);
@@ -284,12 +252,13 @@ export class TransactionQueue {
 
       return {
         id: data.id,
+        blockchain: isSupportedBlockchain(data.blockchain) ? data.blockchain : 'starknet',
         contractAddress: data.contract_address,
         entrypoint: data.entrypoint,
         calldata: data.calldata,
         retries: data.retries,
         maxRetries: data.max_retries,
-        status: data.status as any,
+        status: data.status as TransactionStatus,
       };
     } catch (error) {
       console.error('❌ Error fetching next transaction:', error);
@@ -302,7 +271,7 @@ export class TransactionQueue {
    */
   private async updateTransactionStatus(
     id: string,
-    status: 'pending' | 'processing' | 'completed' | 'failed',
+    status: TransactionStatus,
     extra?: { transactionHash?: string; errorMessage?: string }
   ): Promise<void> {
     if (!this.useSupabase) {
@@ -374,46 +343,7 @@ export class TransactionQueue {
    * Execute a single transaction
    */
   private async executeTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
-    try {
-      console.log(`\n📤 Executing transaction on Starknet...`);
-      console.log(`   Contract:   ${transaction.contractAddress}`);
-      console.log(`   Entrypoint: ${transaction.entrypoint}`);
-      console.log(`   Calldata:   ${JSON.stringify(transaction.calldata)}`);
-
-      // Prepare the call
-      const call: Call = {
-        contractAddress: transaction.contractAddress,
-        entrypoint: transaction.entrypoint,
-        calldata: transaction.calldata
-      };
-
-      console.log(`[${new Date().toISOString()}] Executing ${call.entrypoint} on Starknet...`);
-
-      // Execute transaction
-      const starknetNonce = await this.account.getNonce();
-      const { transaction_hash } = await this.account.execute(call, {
-        nonce: starknetNonce,
-        skipValidate: true,
-      });
-
-      console.log(`✅ Transaction sent: ${transaction_hash}`);
-
-      // Wait for confirmation
-      console.log('⏳ Waiting for confirmation...');
-      await this.account.waitForTransaction(transaction_hash);
-
-      console.log(`✅ Transaction confirmed: ${transaction_hash}\n`);
-
-      return {
-        success: true,
-        transactionHash: transaction_hash
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error : new Error(String(error))
-      };
-    }
+    return executeQueuedTransaction(transaction);
   }
 
   /**

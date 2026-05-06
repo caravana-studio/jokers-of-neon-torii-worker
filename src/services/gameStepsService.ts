@@ -1,5 +1,11 @@
 import { supabase } from '../config/supabase.js';
 import { env } from '../env.js';
+import { isSupportedBlockchain, type SupportedBlockchain } from '../transactionQueueTypes.js';
+
+export interface FullGameData {
+  blockchain?: SupportedBlockchain;
+  [key: string]: unknown;
+}
 
 /**
  * Custom error for empty or invalid API responses
@@ -31,7 +37,7 @@ function isValidGameData(data: any): boolean {
  * @throws Error if API request fails
  * @throws EmptyGameDataError if API returns empty or invalid data
  */
-export async function fetchFullGameData(gameId: number): Promise<any> {
+export async function fetchFullGameData(gameId: number): Promise<FullGameData> {
   const url = `${env.FULL_GAME_API_URL}?game_id=${gameId}`;
 
   console.log(`   Fetching game data from API: ${url}`);
@@ -42,7 +48,7 @@ export async function fetchFullGameData(gameId: number): Promise<any> {
     throw new Error(`API request failed with status ${response.status}: ${response.statusText}`);
   }
 
-  const data = await response.json();
+  const data = await response.json() as FullGameData;
 
   // Validate that we got useful data
   if (!isValidGameData(data)) {
@@ -50,6 +56,21 @@ export async function fetchFullGameData(gameId: number): Promise<any> {
   }
 
   return data;
+}
+
+/**
+ * Gets the blockchain for a game from the FULL_GAME_API_URL response.
+ * Defaults to Starknet only when the API response is valid but does not include the field yet.
+ */
+export async function fetchGameBlockchain(gameId: number): Promise<SupportedBlockchain> {
+  const data = await fetchFullGameData(gameId);
+
+  if (isSupportedBlockchain(data.blockchain)) {
+    return data.blockchain;
+  }
+
+  console.warn(`⚠️  FULL_GAME_API_URL did not include a valid blockchain for game_id=${gameId}. Falling back to starknet.`);
+  return 'starknet';
 }
 
 /**
@@ -82,7 +103,7 @@ async function getNextStep(gameId: number): Promise<number> {
  * @param data - The game data from the API
  * @returns The created game step record
  */
-export async function saveGameStep(gameId: number, data: any): Promise<{ id: string; step: number } | null> {
+export async function saveGameStep(gameId: number, data: FullGameData): Promise<{ id: string; step: number } | null> {
   // Check if Supabase is configured
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
     console.log('ℹ️  Supabase not configured - skipping game step save');
