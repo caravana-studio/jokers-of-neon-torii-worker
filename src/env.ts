@@ -18,7 +18,7 @@ export const env = {
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || '',
 
-  // Celo / EVM Configuration (Optional - reserved for multi-chain execution)
+  // Celo / EVM Configuration (Optional - used for EVM execution)
   CELO_RPC_URL: process.env.CELO_RPC_URL || '',
   CELO_PRIVATE_KEY: process.env.CELO_PRIVATE_KEY || '',
   CELO_ADDRESS: process.env.CELO_ADDRESS || '',
@@ -66,6 +66,19 @@ function validateConfig() {
     if (starknetMissing.length > 0) {
       console.warn(`⚠️  Configuración de Starknet incompleta: ${starknetMissing.join(', ')}`);
       console.warn('⚠️  El bot funcionará en modo solo lectura');
+    }
+  }
+
+  if (env.CELO_PRIVATE_KEY) {
+    const celoRequired = ['CELO_RPC_URL'];
+    const celoMissing = celoRequired.filter(key => !env[key as keyof typeof env]);
+
+    if (celoMissing.length > 0) {
+      console.warn(`⚠️  Configuración de Celo incompleta: ${celoMissing.join(', ')}`);
+    }
+
+    if (!env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS && !env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS) {
+      console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS o CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS');
     }
   }
 }

@@ -75,6 +75,43 @@ function buildGameWonStats(player: string): string[] {
   return [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
 }
 
+function getCeloProfileContractAddress(): string {
+  return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS;
+}
+
+function getCeloProgressionContractAddress(): string {
+  return env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS || env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
+}
+
+function hasCeloWriteConfig(): boolean {
+  return !!(env.CELO_RPC_URL && env.CELO_PRIVATE_KEY);
+}
+
+async function buildCeloGameSnapshotTransactions(_player: string, gameId: number): Promise<EnqueueTransactionParams[]> {
+  const contractAddress = getCeloProfileContractAddress();
+  if (!contractAddress || !hasCeloWriteConfig()) {
+    return [];
+  }
+
+  const { game, round } = await getGameData(gameId);
+  const specials = await getGameSpecials(gameId);
+
+  return [
+    {
+      blockchain: 'celo',
+      contractAddress,
+      entrypoint: 'setGameData',
+      calldata: buildGameDataCalldata(game, specials),
+    },
+    {
+      blockchain: 'celo',
+      contractAddress,
+      entrypoint: 'setRoundData',
+      calldata: buildRoundDataCalldata(game, round, String(game.owner)),
+    },
+  ];
+}
+
 function warnNoop(blockchain: SupportedBlockchain, eventName: string): EnqueueTransactionParams[] {
   console.warn(`⚠️  ${blockchain} handler has no implementation for ${eventName} yet`);
   return [];
@@ -215,20 +252,36 @@ const celoEventHandler: BlockchainEventHandler = {
     return warnNoop('celo', 'CreateGameEvent');
   },
 
-  async buildPlayWinGameTransactions() {
-    return warnNoop('celo', 'PlayWinGameEvent');
+  async buildPlayWinGameTransactions(event) {
+    return buildCeloGameSnapshotTransactions(event.player, event.gameId);
   },
 
-  async buildPlayGameOverTransactions() {
-    return warnNoop('celo', 'PlayGameOverEvent');
+  async buildPlayGameOverTransactions(event) {
+    return buildCeloGameSnapshotTransactions(event.player, event.gameId);
   },
 
   async buildLevelPassedTransactions() {
     return warnNoop('celo', 'LevelPassedEvent');
   },
 
-  async buildProgressionUpdatedTransactions() {
-    return warnNoop('celo', 'ProgressionUpdatedEvent');
+  async buildProgressionUpdatedTransactions(event) {
+    const contractAddress = getCeloProgressionContractAddress();
+    if (!contractAddress || !hasCeloWriteConfig()) {
+      return [];
+    }
+
+    return [{
+      blockchain: 'celo',
+      contractAddress,
+      entrypoint: 'syncProgression',
+      calldata: [
+        event.player,
+        event.tier.toString(),
+        event.totalRuns.toString(),
+        event.maxLevel.toString(),
+        event.maxRound.toString(),
+      ],
+    }];
   },
 };
 

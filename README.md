@@ -8,6 +8,7 @@ Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón 
 - ✅ Procesa eventos `MissionCompletedEvent`
 - ✅ Modo solo lectura (sin ejecutar transacciones)
 - ✅ Modo ejecución (ejecuta transacciones en Starknet)
+- ✅ Soporte multi-chain para encolar y ejecutar escrituras en Celo
 - ✅ Basado en el SDK oficial de Dojo.js
 
 ## Instalación
@@ -36,6 +37,13 @@ MANIFEST_SLOT_ENV=dev
 STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 STARKNET_PRIVATE_KEY=0x...
 STARKNET_ADDRESS=0x...
+
+# Opcional (para ejecutar escrituras EVM en Celo Alfajores)
+CELO_RPC_URL=https://alfajores-forno.celo-testnet.org
+CELO_PRIVATE_KEY=0x...
+CELO_ADDRESS=0x...
+CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS=0x...
+CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS=0x...
 ```
 
 ## Uso
