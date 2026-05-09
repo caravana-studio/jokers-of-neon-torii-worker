@@ -1,5 +1,5 @@
 import { supabase } from './config/supabase.js';
-import { env } from './env.js';
+import { env, getWorkerBlockchainFilter } from './env.js';
 import { executeQueuedTransaction } from './transactionExecutors/index.js';
 import {
   isSupportedBlockchain,
@@ -17,6 +17,7 @@ export class TransactionQueue {
   private processing = false;
   private currentTransactionId: string | null = null;
   private useSupabase: boolean;
+  private blockchainFilter = getWorkerBlockchainFilter();
 
   constructor() {
     // Check if Supabase is configured
@@ -38,16 +39,25 @@ export class TransactionQueue {
     }
 
     console.log('💼 Transaction Queue: Initializing with Supabase...');
+    if (this.blockchainFilter) {
+      console.log(`💼 Transaction Queue: filtering blockchain=${this.blockchainFilter}`);
+    }
 
     try {
       // Recover any transactions that were being processed when the worker crashed
       await this.recoverOrphanedTransactions();
 
       // Count pending transactions
-      const { count, error } = await supabase
+      let countQuery = supabase
         .from('torii_worker_transaction_queue')
         .select('*', { count: 'exact', head: true })
         .eq('status', 'pending');
+
+      if (this.blockchainFilter) {
+        countQuery = countQuery.eq('blockchain', this.blockchainFilter);
+      }
+
+      const { count, error } = await countQuery;
 
       if (error) throw error;
 
@@ -72,11 +82,16 @@ export class TransactionQueue {
    */
   private async recoverOrphanedTransactions(): Promise<void> {
     try {
-      const { data, error } = await supabase
+      let recoverQuery = supabase
         .from('torii_worker_transaction_queue')
         .update({ status: 'pending' })
-        .eq('status', 'processing')
-        .select();
+        .eq('status', 'processing');
+
+      if (this.blockchainFilter) {
+        recoverQuery = recoverQuery.eq('blockchain', this.blockchainFilter);
+      }
+
+      const { data, error } = await recoverQuery.select();
 
       if (error) throw error;
 
@@ -232,10 +247,16 @@ export class TransactionQueue {
     }
 
     try {
-      const { data, error } = await supabase
+      let nextQuery = supabase
         .from('torii_worker_transaction_queue')
         .select('*')
-        .eq('status', 'pending')
+        .eq('status', 'pending');
+
+      if (this.blockchainFilter) {
+        nextQuery = nextQuery.eq('blockchain', this.blockchainFilter);
+      }
+
+      const { data, error } = await nextQuery
         .order('created_at', { ascending: true })
         .limit(1)
         .single();
@@ -293,7 +314,7 @@ export class TransactionQueue {
         updateData.error_message = extra.errorMessage;
       }
 
-      const { error, count } = await supabase
+      const { error, data } = await supabase
         .from('torii_worker_transaction_queue')
         .update(updateData)
         .eq('id', id)
@@ -304,10 +325,10 @@ export class TransactionQueue {
         throw error;
       }
 
-      if (!count || count === 0) {
+      if (!data || data.length === 0) {
         console.warn(`⚠️  No rows updated for transaction ${id}`);
       } else {
-        console.log(`🔄 Status updated: ${id} -> ${status} (${count} row(s))`);
+        console.log(`🔄 Status updated: ${id} -> ${status} (${data.length} row(s))`);
       }
     } catch (error) {
       console.error('❌ Error updating transaction status:', error);

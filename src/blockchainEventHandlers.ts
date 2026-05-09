@@ -8,6 +8,7 @@ import {
   getPlayerStats,
 } from './starknetExecutor.js';
 import type { EnqueueTransactionParams, SupportedBlockchain } from './transactionQueueTypes.js';
+import { resolveCeloWalletFromBurnerAddress } from './services/celoWalletResolver.js';
 
 export interface MissionCompletedEventData {
   player: string;
@@ -95,19 +96,25 @@ async function buildCeloGameSnapshotTransactions(_player: string, gameId: number
 
   const { game, round } = await getGameData(gameId);
   const specials = await getGameSpecials(gameId);
+  const playerWallet = await resolveCeloWalletFromBurnerAddress(String(game.owner));
+
+  if (!playerWallet) {
+    console.warn(`⚠️  Could not resolve an EVM wallet for Celo burner ${String(game.owner)} (game ${gameId}); skipping snapshot sync`);
+    return [];
+  }
 
   return [
     {
       blockchain: 'celo',
       contractAddress,
       entrypoint: 'setGameData',
-      calldata: buildGameDataCalldata(game, specials),
+      calldata: buildGameDataCalldata({ ...game, owner: playerWallet }, specials),
     },
     {
       blockchain: 'celo',
       contractAddress,
       entrypoint: 'setRoundData',
-      calldata: buildRoundDataCalldata(game, round, String(game.owner)),
+      calldata: buildRoundDataCalldata(game, round, playerWallet),
     },
   ];
 }
@@ -270,12 +277,18 @@ const celoEventHandler: BlockchainEventHandler = {
       return [];
     }
 
+    const playerWallet = await resolveCeloWalletFromBurnerAddress(event.player);
+    if (!playerWallet) {
+      console.warn(`⚠️  Could not resolve an EVM wallet for Celo burner ${event.player}; skipping progression sync`);
+      return [];
+    }
+
     return [{
       blockchain: 'celo',
       contractAddress,
       entrypoint: 'syncProgression',
       calldata: [
-        event.player,
+        playerWallet,
         event.tier.toString(),
         event.totalRuns.toString(),
         event.maxLevel.toString(),

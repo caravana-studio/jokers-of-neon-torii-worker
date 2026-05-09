@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { isSupportedBlockchain, type SupportedBlockchain } from './transactionQueueTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,6 +26,7 @@ export const env = {
   CELO_XP_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_XP_SYSTEM_CONTRACT_ADDRESS || '',
   CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
   CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
+  WORKER_BLOCKCHAIN_FILTER: process.env.WORKER_BLOCKCHAIN_FILTER || '',
 
   // XP System Contract
   XP_SYSTEM_CONTRACT_ADDRESS: process.env.XP_SYSTEM_CONTRACT_ADDRESS || '',
@@ -84,3 +86,9 @@ function validateConfig() {
 }
 
 validateConfig();
+
+export function getWorkerBlockchainFilter(): SupportedBlockchain | null {
+  return isSupportedBlockchain(env.WORKER_BLOCKCHAIN_FILTER)
+    ? env.WORKER_BLOCKCHAIN_FILTER
+    : null;
+}

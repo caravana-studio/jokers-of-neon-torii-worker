@@ -7,6 +7,10 @@ export interface FullGameData {
   [key: string]: unknown;
 }
 
+interface FetchFullGameDataOptions {
+  logRequest?: boolean;
+}
+
 /**
  * Custom error for empty or invalid API responses
  */
@@ -37,10 +41,13 @@ function isValidGameData(data: any): boolean {
  * @throws Error if API request fails
  * @throws EmptyGameDataError if API returns empty or invalid data
  */
-export async function fetchFullGameData(gameId: number): Promise<FullGameData> {
+export async function fetchFullGameData(gameId: number, options: FetchFullGameDataOptions = {}): Promise<FullGameData> {
+  const { logRequest = true } = options;
   const url = `${env.FULL_GAME_API_URL}?game_id=${gameId}`;
 
-  console.log(`   Fetching game data from API: ${url}`);
+  if (logRequest) {
+    console.log(`   Fetching game data from API: ${url}`);
+  }
 
   const response = await fetch(url);
 
@@ -62,8 +69,11 @@ export async function fetchFullGameData(gameId: number): Promise<FullGameData> {
  * Gets the blockchain for a game from the FULL_GAME_API_URL response.
  * Defaults to Starknet only when the API response is valid but does not include the field yet.
  */
-export async function fetchGameBlockchain(gameId: number): Promise<SupportedBlockchain> {
-  const data = await fetchFullGameData(gameId);
+export async function fetchGameBlockchain(
+  gameId: number,
+  options: FetchFullGameDataOptions = {}
+): Promise<SupportedBlockchain> {
+  const data = await fetchFullGameData(gameId, options);
 
   if (isSupportedBlockchain(data.blockchain)) {
     return data.blockchain;

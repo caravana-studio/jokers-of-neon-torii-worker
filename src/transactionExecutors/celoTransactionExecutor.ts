@@ -72,9 +72,9 @@ const celoProfileAbi = [
   },
 ] as const;
 
-const celoAlfajores = defineChain({
-  id: 44787,
-  name: 'Celo Alfajores',
+const celoSepolia = defineChain({
+  id: 11142220,
+  name: 'Celo Sepolia',
   nativeCurrency: {
     name: 'CELO',
     symbol: 'CELO',
@@ -86,8 +86,8 @@ const celoAlfajores = defineChain({
   },
   blockExplorers: {
     default: {
-      name: 'Celo Explorer',
-      url: 'https://alfajores.celoscan.io',
+      name: 'Blockscout',
+      url: 'https://celo-sepolia.blockscout.com',
     },
   },
   testnet: true,
@@ -301,12 +301,12 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
 
     const account = getCeloAccount();
     const publicClient = createPublicClient({
-      chain: celoAlfajores,
+      chain: celoSepolia,
       transport: http(env.CELO_RPC_URL),
     });
     const walletClient = createWalletClient({
       account,
-      chain: celoAlfajores,
+      chain: celoSepolia,
       transport: http(env.CELO_RPC_URL),
     });
 
