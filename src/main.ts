@@ -104,8 +104,12 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
   console.log(`   Mission Type: ${missionType}`);
 
   try {
-    const transactions = await buildTransactionsForAllChains(handler =>
-      handler.buildMissionCompletedTransactions({ player, missionId, missionType })
+    const transactions = await buildTransactionsForGameBlockchain('starknet', selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions({
+        player,
+        missionId,
+        missionType,
+      })
     );
     await enqueueTransactions(transactions);
     logTransactionBuildResult('Daily mission completed', transactions);
@@ -317,7 +321,27 @@ async function createWorker() {
 
             // Check if MissionCompletedEvent exists
             if (coreModels.MissionCompletedEvent) {
-              // Temporarily ignored during Celo-only testing.
+              const event = coreModels.MissionCompletedEvent;
+
+              if (event.player && event.id !== undefined && event.mission_type !== undefined) {
+                if (shouldProcessBlockchain('starknet')) {
+                  console.log('\n🎯 MissionCompletedEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Mission ID:    ${event.id}`);
+                  console.log(`   Mission Type:  ${event.mission_type}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleDailyMissionCompleted(
+                    event.player,
+                    String(event.id),
+                    String(event.mission_type)
+                  );
+                }
+              } else {
+                console.log('⚠️  Incomplete MissionCompletedEvent - will not be processed');
+              }
             }
 
             // Check if CreateGameEvent exists
