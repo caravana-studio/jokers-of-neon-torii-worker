@@ -23,9 +23,7 @@ export const env = {
   CELO_RPC_URL: process.env.CELO_RPC_URL || '',
   CELO_PRIVATE_KEY: process.env.CELO_PRIVATE_KEY || '',
   CELO_ADDRESS: process.env.CELO_ADDRESS || '',
-  CELO_XP_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_XP_SYSTEM_CONTRACT_ADDRESS || '',
   CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
-  CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
   WORKER_BLOCKCHAIN_FILTER: process.env.WORKER_BLOCKCHAIN_FILTER || '',
 
   // XP System Contract
@@ -79,16 +77,23 @@ function validateConfig() {
       console.warn(`⚠️  Configuración de Celo incompleta: ${celoMissing.join(', ')}`);
     }
 
-    if (!env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS && !env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS) {
-      console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS o CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS');
+    if (!env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS) {
+      console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS');
     }
   }
 }
 
 validateConfig();
 
-export function getWorkerBlockchainFilter(): SupportedBlockchain | null {
-  return isSupportedBlockchain(env.WORKER_BLOCKCHAIN_FILTER)
-    ? env.WORKER_BLOCKCHAIN_FILTER
-    : null;
+export function getWorkerBlockchainFilter(): SupportedBlockchain[] | null {
+  const parsed = env.WORKER_BLOCKCHAIN_FILTER
+    .split(',')
+    .map(value => value.trim())
+    .filter(isSupportedBlockchain);
+
+  if (parsed.length === 0) {
+    return null;
+  }
+
+  return Array.from(new Set(parsed));
 }

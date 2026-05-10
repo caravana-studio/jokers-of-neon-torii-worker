@@ -1,7 +1,7 @@
 import { w3cwebsocket } from 'websocket';
 import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
-import { env } from './env.js';
+import { env, getWorkerBlockchainFilter } from './env.js';
 import { dojoConfig } from './dojoConfig.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { fetchGameBlockchain } from './services/gameStepsService.js';
@@ -26,6 +26,7 @@ const txQueue = getTransactionQueue();
 
 // Initialize cron scheduler
 const cronScheduler = getCronScheduler();
+const workerBlockchainFilter = getWorkerBlockchainFilter();
 
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
@@ -53,6 +54,20 @@ async function enqueueTransactions(transactions: EnqueueTransactionParams[]): Pr
   }
 }
 
+function shouldProcessBlockchain(blockchain: SupportedBlockchain): boolean {
+  return !workerBlockchainFilter || workerBlockchainFilter.includes(blockchain);
+}
+
+function getEnabledBlockchainEventHandlers(): BlockchainEventHandler[] {
+  if (!workerBlockchainFilter) {
+    return getAllBlockchainEventHandlers();
+  }
+
+  return getAllBlockchainEventHandlers().filter(handler =>
+    workerBlockchainFilter.includes(handler.blockchain)
+  );
+}
+
 function logTransactionBuildResult(label: string, transactions: EnqueueTransactionParams[]): void {
   if (transactions.length === 0) {
     console.log(`ℹ️  ${label}: no blockchain handler produced transactions\n`);
@@ -66,7 +81,7 @@ async function buildTransactionsForAllChains(
   build: (handler: BlockchainEventHandler) => Promise<EnqueueTransactionParams[]>
 ): Promise<EnqueueTransactionParams[]> {
   const transactionGroups = await Promise.all(
-    getAllBlockchainEventHandlers().map(handler => build(handler))
+    getEnabledBlockchainEventHandlers().map(handler => build(handler))
   );
 
   return transactionGroups.flat();
@@ -107,8 +122,33 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
   console.log(`\n📊 CurrentHandEvent received`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Cards: [${cards.join(', ')}]`);
-  console.log('⚠️  CurrentHandEvent game step saving is temporarily disabled for Celo-only testing');
-  console.log('✅ Event processed (without saving game step)\n');
+
+  try {
+    // Check if Supabase is configured
+    if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+      console.log('ℹ️  Supabase not configured (read-only mode)');
+      console.log('✅ Event processed (without saving game step)\n');
+      return;
+    }
+
+    // Fetch game data from API and save as a game step
+    console.log('🔄 Fetching and saving game step...');
+    const result = await fetchAndSaveGameStep(gameId);
+
+    if (result) {
+      console.log(`✅ Game step saved successfully: step=${result.step}\n`);
+    } else {
+      console.log('ℹ️  Game step not saved (Supabase not configured)\n');
+    }
+  } catch (error) {
+    if (error instanceof EmptyGameDataError) {
+      console.warn(`⚠️  Skipping game step: ${error.message}`);
+    } else {
+      console.error('❌ Error saving game step:', error);
+    }
+
+    console.log('👂 Continuing to listen for events...\n');
+  }
 }
 
 /**
@@ -289,7 +329,7 @@ async function createWorker() {
                 const gameId = Number(event.game_id);
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-                if (blockchain === 'celo') {
+                if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🎮 CreateGameEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Player:        ${event.player || 'N/A'}`);
@@ -313,7 +353,7 @@ async function createWorker() {
                 const gameId = Number(event.game_id);
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-                if (blockchain === 'celo') {
+                if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🎮 CurrentHandEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Game ID:       ${gameId}`);
@@ -337,7 +377,7 @@ async function createWorker() {
                 const gameId = Number(event.game_id);
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-                if (blockchain === 'celo') {
+                if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🏆 PlayWinGameEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Player:        ${event.player || 'N/A'}`);
@@ -361,7 +401,7 @@ async function createWorker() {
                 const gameId = Number(event.game_id);
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-                if (blockchain === 'celo') {
+                if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🏁 PlayGameOverEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Player:        ${event.player || 'N/A'}`);
@@ -385,7 +425,7 @@ async function createWorker() {
                 const gameId = Number(event.game_id);
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-                if (blockchain === 'celo') {
+                if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n⬆️  LevelPassedEvent found!');
                   console.log(`   Entity ID:       ${entityId}`);
                   console.log(`   Player:          ${event.player || 'N/A'}`);

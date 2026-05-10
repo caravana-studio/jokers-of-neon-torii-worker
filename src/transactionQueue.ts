@@ -40,7 +40,7 @@ export class TransactionQueue {
 
     console.log('💼 Transaction Queue: Initializing with Supabase...');
     if (this.blockchainFilter) {
-      console.log(`💼 Transaction Queue: filtering blockchain=${this.blockchainFilter}`);
+      console.log(`💼 Transaction Queue: filtering blockchains=${this.blockchainFilter.join(',')}`);
     }
 
     try {
@@ -54,7 +54,7 @@ export class TransactionQueue {
         .eq('status', 'pending');
 
       if (this.blockchainFilter) {
-        countQuery = countQuery.eq('blockchain', this.blockchainFilter);
+        countQuery = countQuery.in('blockchain', this.blockchainFilter);
       }
 
       const { count, error } = await countQuery;
@@ -88,7 +88,7 @@ export class TransactionQueue {
         .eq('status', 'processing');
 
       if (this.blockchainFilter) {
-        recoverQuery = recoverQuery.eq('blockchain', this.blockchainFilter);
+        recoverQuery = recoverQuery.in('blockchain', this.blockchainFilter);
       }
 
       const { data, error } = await recoverQuery.select();
@@ -253,7 +253,7 @@ export class TransactionQueue {
         .eq('status', 'pending');
 
       if (this.blockchainFilter) {
-        nextQuery = nextQuery.eq('blockchain', this.blockchainFilter);
+        nextQuery = nextQuery.in('blockchain', this.blockchainFilter);
       }
 
       const { data, error } = await nextQuery

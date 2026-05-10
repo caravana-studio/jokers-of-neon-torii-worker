@@ -76,12 +76,8 @@ function buildGameWonStats(player: string): string[] {
   return [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
 }
 
-function getCeloProfileContractAddress(): string {
-  return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS;
-}
-
-function getCeloProgressionContractAddress(): string {
-  return env.CELO_PROGRESSION_SYSTEM_CONTRACT_ADDRESS || env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
+function getCeloContractAddress(): string {
+  return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
 }
 
 function hasCeloWriteConfig(): boolean {
@@ -89,7 +85,7 @@ function hasCeloWriteConfig(): boolean {
 }
 
 async function buildCeloGameSnapshotTransactions(_player: string, gameId: number): Promise<EnqueueTransactionParams[]> {
-  const contractAddress = getCeloProfileContractAddress();
+  const contractAddress = getCeloContractAddress();
   if (!contractAddress || !hasCeloWriteConfig()) {
     return [];
   }
@@ -272,7 +268,7 @@ const celoEventHandler: BlockchainEventHandler = {
   },
 
   async buildProgressionUpdatedTransactions(event) {
-    const contractAddress = getCeloProgressionContractAddress();
+    const contractAddress = getCeloContractAddress();
     if (!contractAddress || !hasCeloWriteConfig()) {
       return [];
     }
