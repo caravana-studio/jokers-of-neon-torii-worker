@@ -2,6 +2,8 @@ import { Account, Call, RpcProvider } from 'starknet';
 import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 
+let starknetRpcHealthCheckPromise: Promise<void> | null = null;
+
 function getStarknetProvider(): RpcProvider {
   return new RpcProvider({
     nodeUrl: env.STARKNET_RPC_URL,
@@ -9,6 +11,57 @@ function getStarknetProvider(): RpcProvider {
       ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` }
       : undefined,
   });
+}
+
+function truncateBody(body: string): string {
+  return body.length > 240 ? `${body.slice(0, 240)}...` : body;
+}
+
+async function ensureStarknetRpcReachable(): Promise<void> {
+  if (!starknetRpcHealthCheckPromise) {
+    starknetRpcHealthCheckPromise = (async () => {
+      const response = await fetch(env.STARKNET_RPC_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(env.STARKNET_RPC_API_KEY ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` } : {}),
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'starknet_chainId',
+          params: [],
+        }),
+      });
+
+      const body = await response.text();
+      let parsed: unknown;
+
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        throw new Error(
+          `STARKNET_RPC_URL returned a non-JSON response (${response.status}). Check that it points to a Starknet JSON-RPC endpoint. Body: ${truncateBody(body)}`
+        );
+      }
+
+      const rpcResponse = parsed as { result?: unknown; error?: { code?: number; message?: string } };
+      if (rpcResponse.error) {
+        throw new Error(
+          `STARKNET_RPC_URL rejected starknet_chainId (${rpcResponse.error.code ?? 'unknown'}): ${rpcResponse.error.message ?? 'Unknown RPC error'}`
+        );
+      }
+
+      if (!rpcResponse.result) {
+        throw new Error(`STARKNET_RPC_URL returned an invalid starknet_chainId response: ${truncateBody(body)}`);
+      }
+    })().catch(error => {
+      starknetRpcHealthCheckPromise = null;
+      throw error;
+    });
+  }
+
+  return starknetRpcHealthCheckPromise;
 }
 
 function getStarknetAccount(): Account {
@@ -31,6 +84,7 @@ function ensureStarknetWriteConfig(): void {
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
+    await ensureStarknetRpcReachable();
 
     const call: Call = {
       contractAddress: transaction.contractAddress,
