@@ -2,7 +2,7 @@ import { getAddress, isAddress } from 'viem';
 import { supabase } from '../config/supabase.js';
 
 interface UserBurnerRecord {
-  blockchain: 'starknet' | 'celo';
+  blockchain: string;
   user_wallet: string;
   burner_address: string;
 }

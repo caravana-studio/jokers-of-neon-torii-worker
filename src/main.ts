@@ -2,9 +2,8 @@ import { w3cwebsocket } from 'websocket';
 import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
 import { env, getWorkerBlockchainFilter } from './env.js';
-import { dojoConfig } from './dojoConfig.js';
 import { getTransactionQueue } from './transactionQueue.js';
-import { fetchGameBlockchain } from './services/gameStepsService.js';
+import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
 import { getCronScheduler } from './cron/cronScheduler.js';
 import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
 import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
@@ -13,7 +12,7 @@ import {
   getBlockchainEventHandler,
   type BlockchainEventHandler,
 } from './blockchainEventHandlers.js';
-import type { EnqueueTransactionParams, SupportedBlockchain } from './transactionQueueTypes.js';
+import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -37,7 +36,7 @@ console.log('');
 async function resolveGameBlockchain(
   gameId: number,
   options: { logTarget?: boolean; logFetch?: boolean } = {}
-): Promise<SupportedBlockchain> {
+): Promise<BlockchainId> {
   const { logTarget = true, logFetch = true } = options;
   const blockchain = await fetchGameBlockchain(gameId, { logRequest: logFetch });
 
@@ -54,7 +53,7 @@ async function enqueueTransactions(transactions: EnqueueTransactionParams[]): Pr
   }
 }
 
-function shouldProcessBlockchain(blockchain: SupportedBlockchain): boolean {
+function shouldProcessBlockchain(blockchain: BlockchainId): boolean {
   return !workerBlockchainFilter || workerBlockchainFilter.includes(blockchain);
 }
 
@@ -88,8 +87,8 @@ async function buildTransactionsForAllChains(
 }
 
 async function buildTransactionsForGameBlockchain(
-  blockchain: SupportedBlockchain,
-  build: (blockchain: SupportedBlockchain) => Promise<EnqueueTransactionParams[]>
+  blockchain: BlockchainId,
+  build: (blockchain: BlockchainId) => Promise<EnqueueTransactionParams[]>
 ): Promise<EnqueueTransactionParams[]> {
   console.log(`   Target blockchain: ${blockchain}`);
   return build(blockchain);
@@ -158,7 +157,7 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
 /**
  * Handles game won event
  */
-async function handlePlayWinGame(player: string, gameId: number, blockchain: SupportedBlockchain) {
+async function handlePlayWinGame(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game won for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
@@ -176,7 +175,7 @@ async function handlePlayWinGame(player: string, gameId: number, blockchain: Sup
 /**
  * Handles game over event
  */
-async function handleGameOver(player: string, gameId: number, blockchain: SupportedBlockchain) {
+async function handleGameOver(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game over for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
@@ -194,7 +193,7 @@ async function handleGameOver(player: string, gameId: number, blockchain: Suppor
 /**
  * Handles create game event
  */
-async function handleCreateGame(player: string, gameId: number, blockchain: SupportedBlockchain) {
+async function handleCreateGame(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game creation for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
@@ -237,7 +236,7 @@ async function handleLevelPassed(
   gameId: number,
   previousLevel: number,
   newLevel: number,
-  blockchain: SupportedBlockchain
+  blockchain: BlockchainId
 ) {
   console.log(`\n🔄 Processing level passed for ${player}...`);
   console.log(`   Game ID: ${gameId}`);

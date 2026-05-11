@@ -1,7 +1,8 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
-import { isSupportedBlockchain, type SupportedBlockchain } from './transactionQueueTypes.js';
+import { formatConfiguredBlockchains, isConfiguredBlockchain } from './config/chains.js';
+import type { BlockchainId } from './transactionQueueTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -85,15 +86,24 @@ function validateConfig() {
 
 validateConfig();
 
-export function getWorkerBlockchainFilter(): SupportedBlockchain[] | null {
-  const parsed = env.WORKER_BLOCKCHAIN_FILTER
+export function getWorkerBlockchainFilter(): BlockchainId[] | null {
+  const values = env.WORKER_BLOCKCHAIN_FILTER
     .split(',')
-    .map(value => value.trim())
-    .filter(isSupportedBlockchain);
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
 
-  if (parsed.length === 0) {
+  if (values.length === 0) {
     return null;
   }
+
+  const invalid = values.filter(value => !isConfiguredBlockchain(value));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid WORKER_BLOCKCHAIN_FILTER value(s): ${invalid.join(', ')}. Supported values: ${formatConfiguredBlockchains()}`
+    );
+  }
+
+  const parsed = values.filter(isConfiguredBlockchain);
 
   return Array.from(new Set(parsed));
 }

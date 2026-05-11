@@ -1,9 +1,42 @@
-// Re-export los schemas generados
-export * from '../typescript/models.gen.js';
-export * from '../typescript/contracts.gen.js';
-
 // Namespace del proyecto
 export const NAMESPACE = 'jokers_of_neon';
+
+export type BigNumberish = string | number | bigint;
+
+export interface GameSpecials {
+  game_id: BigNumberish;
+  specials: BigNumberish[][];
+}
+
+export interface Game {
+  id: BigNumberish;
+  mod_id: BigNumberish;
+  state: unknown;
+  owner: string;
+  player_name: BigNumberish;
+  player_score: BigNumberish;
+  level: BigNumberish;
+  current_node_id: BigNumberish;
+  round: BigNumberish;
+  hand_len: BigNumberish;
+  plays: BigNumberish;
+  discards: BigNumberish;
+  current_specials_len: BigNumberish;
+  special_slots: BigNumberish;
+  cash: BigNumberish;
+  available_rerolls: BigNumberish;
+  seed: BigNumberish;
+  is_tournament: boolean;
+}
+
+export interface Round {
+  game_id: BigNumberish;
+  current_score: BigNumberish;
+  target_score: BigNumberish;
+  remaining_plays: BigNumberish;
+  remaining_discards: BigNumberish;
+  rages: BigNumberish[];
+}
 
 // PlayerStats struct definition
 export interface PlayerStats {

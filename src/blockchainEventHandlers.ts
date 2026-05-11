@@ -1,13 +1,11 @@
 import { env } from './env.js';
 import {
-  buildGameDataCalldata,
-  buildPlayerStatsCalldata,
-  buildRoundDataCalldata,
   getGameData,
   getGameSpecials,
   getPlayerStats,
 } from './starknetExecutor.js';
-import type { EnqueueTransactionParams, SupportedBlockchain } from './transactionQueueTypes.js';
+import type { Game } from './schema.js';
+import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 import { resolveCeloWalletFromBurnerAddress } from './services/celoWalletResolver.js';
 
 export interface MissionCompletedEventData {
@@ -35,7 +33,7 @@ export interface ProgressionUpdatedEventData {
 }
 
 export interface BlockchainEventHandler {
-  blockchain: SupportedBlockchain;
+  blockchain: BlockchainId;
   buildMissionCompletedTransactions(event: MissionCompletedEventData): Promise<EnqueueTransactionParams[]>;
   buildCreateGameTransactions(event: GameEventData): Promise<EnqueueTransactionParams[]>;
   buildPlayWinGameTransactions(event: GameEventData): Promise<EnqueueTransactionParams[]>;
@@ -44,49 +42,81 @@ export interface BlockchainEventHandler {
   buildProgressionUpdatedTransactions(event: ProgressionUpdatedEventData): Promise<EnqueueTransactionParams[]>;
 }
 
-function buildCreateGameStats(player: string): string[] {
-  return [
-    player,
-    '1',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-    '0',
-  ];
-}
-
-function buildGameWonStats(player: string): string[] {
-  return [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
-}
-
-function getCeloContractAddress(): string {
-  return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
+function hasStarknetWriteConfig(...contractAddresses: string[]): boolean {
+  return !!(
+    env.STARKNET_PRIVATE_KEY &&
+    env.STARKNET_RPC_URL &&
+    env.STARKNET_ADDRESS &&
+    contractAddresses.every(Boolean)
+  );
 }
 
 function hasCeloWriteConfig(): boolean {
-  return !!(env.CELO_RPC_URL && env.CELO_PRIVATE_KEY);
+  return !!(
+    env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS &&
+    env.CELO_RPC_URL &&
+    env.CELO_PRIVATE_KEY
+  );
 }
 
-async function buildCeloGameSnapshotTransactions(_player: string, gameId: number): Promise<EnqueueTransactionParams[]> {
-  const contractAddress = getCeloContractAddress();
-  if (!contractAddress || !hasCeloWriteConfig()) {
+function gameSnapshotIntent(
+  blockchain: BlockchainId,
+  game: Game,
+  specials: number[],
+  metadata: Record<string, unknown>
+): EnqueueTransactionParams {
+  return {
+    blockchain,
+    operation: 'game.snapshot',
+    targetRef: 'profile_system',
+    payload: { game, specials },
+    metadata,
+  };
+}
+
+function roundSnapshotIntent(
+  blockchain: BlockchainId,
+  game: Game,
+  round: unknown,
+  playerAddress: string,
+  metadata: Record<string, unknown>
+): EnqueueTransactionParams {
+  return {
+    blockchain,
+    operation: 'round.snapshot',
+    targetRef: 'profile_system',
+    payload: { game, round, playerAddress },
+    metadata,
+  };
+}
+
+function progressionIntent(
+  blockchain: BlockchainId,
+  player: string,
+  event: Omit<ProgressionUpdatedEventData, 'player'>
+): EnqueueTransactionParams {
+  return {
+    blockchain,
+    operation: 'progression.sync',
+    targetRef: blockchain === 'starknet' ? 'progression_system' : 'profile_system',
+    payload: {
+      player,
+      tier: event.tier,
+      totalRuns: event.totalRuns,
+      maxLevel: event.maxLevel,
+      maxRound: event.maxRound,
+    },
+    metadata: { sourceEvent: 'ProgressionUpdatedEvent' },
+  };
+}
+
+function warnNoop(blockchain: BlockchainId, eventName: string): EnqueueTransactionParams[] {
+  console.warn(`⚠️  ${blockchain} handler has no implementation for ${eventName} yet`);
+  return [];
+}
+
+async function buildCeloGameSnapshotTransactions(gameId: number): Promise<EnqueueTransactionParams[]> {
+  if (!hasCeloWriteConfig()) {
     return [];
   }
 
@@ -99,125 +129,135 @@ async function buildCeloGameSnapshotTransactions(_player: string, gameId: number
     return [];
   }
 
-  return [
-    {
-      blockchain: 'celo',
-      contractAddress,
-      entrypoint: 'setGameData',
-      calldata: buildGameDataCalldata({ ...game, owner: playerWallet }, specials),
-    },
-    {
-      blockchain: 'celo',
-      contractAddress,
-      entrypoint: 'setRoundData',
-      calldata: buildRoundDataCalldata(game, round, playerWallet),
-    },
-  ];
-}
+  const gameForExternalOwner: Game = { ...game, owner: playerWallet };
+  const metadata = { sourceGameId: gameId, sourceEvent: 'SlotSettlementEvent' };
 
-function warnNoop(blockchain: SupportedBlockchain, eventName: string): EnqueueTransactionParams[] {
-  console.warn(`⚠️  ${blockchain} handler has no implementation for ${eventName} yet`);
-  return [];
+  return [
+    gameSnapshotIntent('celo', gameForExternalOwner, specials, metadata),
+    roundSnapshotIntent('celo', game, round, playerWallet, metadata),
+  ];
 }
 
 const starknetEventHandler: BlockchainEventHandler = {
   blockchain: 'starknet',
 
   async buildMissionCompletedTransactions(event) {
-    if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.XP_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
     return [{
       blockchain: 'starknet',
-      contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_daily_mission_xp',
-      calldata: [event.player, event.missionType],
+      operation: 'xp.daily_mission',
+      targetRef: 'xp_system',
+      payload: {
+        player: event.player,
+        missionType: event.missionType,
+      },
+      metadata: {
+        sourceEvent: 'MissionCompletedEvent',
+        missionId: event.missionId,
+      },
     }];
   },
 
   async buildCreateGameTransactions(event) {
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.PROFILE_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
     return [{
       blockchain: 'starknet',
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_stats',
-      calldata: buildCreateGameStats(event.player),
+      operation: 'stats.game_created',
+      targetRef: 'profile_system',
+      payload: { player: event.player },
+      metadata: {
+        sourceEvent: 'CreateGameEvent',
+        gameId: event.gameId,
+      },
     }];
   },
 
   async buildPlayWinGameTransactions(event) {
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.PROFILE_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
     const { game, round } = await getGameData(event.gameId);
     const specials = await getGameSpecials(event.gameId);
+    const metadata = {
+      sourceEvent: 'PlayWinGameEvent',
+      gameId: event.gameId,
+    };
 
     return [
-      {
-        blockchain: 'starknet',
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'set_round_data',
-        calldata: buildRoundDataCalldata(game, round, event.player),
-      },
-      {
-        blockchain: 'starknet',
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'set_game_data',
-        calldata: buildGameDataCalldata(game, specials),
-      },
+      roundSnapshotIntent('starknet', game, round, event.player, metadata),
+      gameSnapshotIntent('starknet', game, specials, metadata),
     ];
   },
 
   async buildPlayGameOverTransactions(event) {
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.PROFILE_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
     const { game } = await getGameData(event.gameId);
     const specials = await getGameSpecials(event.gameId);
     const playerStats = await getPlayerStats(event.gameId);
+    const metadata = {
+      sourceEvent: 'PlayGameOverEvent',
+      gameId: event.gameId,
+    };
 
     return [
+      gameSnapshotIntent('starknet', game, specials, metadata),
       {
         blockchain: 'starknet',
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'set_game_data',
-        calldata: buildGameDataCalldata(game, specials),
-      },
-      {
-        blockchain: 'starknet',
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'add_stats',
-        calldata: buildPlayerStatsCalldata(event.player, playerStats),
+        operation: 'stats.player',
+        targetRef: 'profile_system',
+        payload: {
+          player: event.player,
+          playerStats,
+        },
+        metadata,
       },
     ];
   },
 
   async buildLevelPassedTransactions(event) {
-    if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.XP_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
     const transactions: EnqueueTransactionParams[] = [
       {
         blockchain: 'starknet',
-        contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'add_level_completion_xp',
-        calldata: [event.player, event.previousLevel.toString()],
+        operation: 'xp.level_completion',
+        targetRef: 'xp_system',
+        payload: {
+          player: event.player,
+          previousLevel: event.previousLevel,
+        },
+        metadata: {
+          sourceEvent: 'LevelPassedEvent',
+          gameId: event.gameId,
+          newLevel: event.newLevel,
+        },
       },
     ];
 
-    if (event.newLevel === 4 && env.PROFILE_SYSTEM_CONTRACT_ADDRESS) {
+    if (event.newLevel === 4 && hasStarknetWriteConfig(env.PROFILE_SYSTEM_CONTRACT_ADDRESS)) {
       transactions.push({
         blockchain: 'starknet',
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'add_stats',
-        calldata: buildGameWonStats(event.player),
+        operation: 'stats.game_won',
+        targetRef: 'profile_system',
+        payload: { player: event.player },
+        metadata: {
+          sourceEvent: 'LevelPassedEvent',
+          gameId: event.gameId,
+          previousLevel: event.previousLevel,
+          newLevel: event.newLevel,
+        },
       });
     }
 
@@ -225,22 +265,11 @@ const starknetEventHandler: BlockchainEventHandler = {
   },
 
   async buildProgressionUpdatedTransactions(event) {
-    if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!hasStarknetWriteConfig(env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS)) {
       return [];
     }
 
-    return [{
-      blockchain: 'starknet',
-      contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'sync_progression',
-      calldata: [
-        event.player,
-        event.tier.toString(),
-        event.totalRuns.toString(),
-        event.maxLevel.toString(),
-        event.maxRound.toString(),
-      ],
-    }];
+    return [progressionIntent('starknet', event.player, event)];
   },
 };
 
@@ -256,11 +285,11 @@ const celoEventHandler: BlockchainEventHandler = {
   },
 
   async buildPlayWinGameTransactions(event) {
-    return buildCeloGameSnapshotTransactions(event.player, event.gameId);
+    return buildCeloGameSnapshotTransactions(event.gameId);
   },
 
   async buildPlayGameOverTransactions(event) {
-    return buildCeloGameSnapshotTransactions(event.player, event.gameId);
+    return buildCeloGameSnapshotTransactions(event.gameId);
   },
 
   async buildLevelPassedTransactions() {
@@ -268,8 +297,7 @@ const celoEventHandler: BlockchainEventHandler = {
   },
 
   async buildProgressionUpdatedTransactions(event) {
-    const contractAddress = getCeloContractAddress();
-    if (!contractAddress || !hasCeloWriteConfig()) {
+    if (!hasCeloWriteConfig()) {
       return [];
     }
 
@@ -279,30 +307,29 @@ const celoEventHandler: BlockchainEventHandler = {
       return [];
     }
 
-    return [{
-      blockchain: 'celo',
-      contractAddress,
-      entrypoint: 'syncProgression',
-      calldata: [
-        playerWallet,
-        event.tier.toString(),
-        event.totalRuns.toString(),
-        event.maxLevel.toString(),
-        event.maxRound.toString(),
-      ],
-    }];
+    return [progressionIntent('celo', playerWallet, event)];
   },
 };
 
-const handlers: Record<SupportedBlockchain, BlockchainEventHandler> = {
-  starknet: starknetEventHandler,
-  celo: celoEventHandler,
-};
+const handlers = new Map<BlockchainId, BlockchainEventHandler>();
 
-export function getBlockchainEventHandler(blockchain: SupportedBlockchain): BlockchainEventHandler {
-  return handlers[blockchain];
+export function registerBlockchainEventHandler(handler: BlockchainEventHandler): void {
+  handlers.set(handler.blockchain, handler);
+}
+
+registerBlockchainEventHandler(starknetEventHandler);
+registerBlockchainEventHandler(celoEventHandler);
+
+export function getBlockchainEventHandler(blockchain: BlockchainId): BlockchainEventHandler {
+  const handler = handlers.get(blockchain);
+
+  if (!handler) {
+    throw new Error(`Unsupported blockchain event handler: ${blockchain}`);
+  }
+
+  return handler;
 }
 
 export function getAllBlockchainEventHandlers(): BlockchainEventHandler[] {
-  return Object.values(handlers);
+  return Array.from(handlers.values());
 }

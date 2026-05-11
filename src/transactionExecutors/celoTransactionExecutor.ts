@@ -1,4 +1,5 @@
 import { env } from '../env.js';
+import { getChainConfig } from '../config/chains.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import {
   createPublicClient,
@@ -72,12 +73,19 @@ const celoProfileAbi = [
   },
 ] as const;
 
-const celoSepolia = defineChain({
-  id: 11142220,
-  name: 'Celo Sepolia',
+const celoConfig = getChainConfig('celo');
+const celoEvmConfig = celoConfig.evm;
+
+if (!celoEvmConfig) {
+  throw new Error('Celo EVM chain configuration is missing');
+}
+
+const celoChain = defineChain({
+  id: celoEvmConfig.chainId,
+  name: celoEvmConfig.name,
   nativeCurrency: {
-    name: 'CELO',
-    symbol: 'CELO',
+    name: celoEvmConfig.nativeSymbol,
+    symbol: celoEvmConfig.nativeSymbol,
     decimals: 18,
   },
   rpcUrls: {
@@ -87,10 +95,10 @@ const celoSepolia = defineChain({
   blockExplorers: {
     default: {
       name: 'Blockscout',
-      url: 'https://celo-sepolia.blockscout.com',
+      url: celoEvmConfig.blockExplorerUrl,
     },
   },
-  testnet: true,
+  testnet: celoEvmConfig.testnet,
 });
 
 type ParsedGameData = {
@@ -301,12 +309,12 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
 
     const account = getCeloAccount();
     const publicClient = createPublicClient({
-      chain: celoSepolia,
+      chain: celoChain,
       transport: http(env.CELO_RPC_URL),
     });
     const walletClient = createWalletClient({
       account,
-      chain: celoSepolia,
+      chain: celoChain,
       transport: http(env.CELO_RPC_URL),
     });
 

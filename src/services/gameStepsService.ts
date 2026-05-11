@@ -1,9 +1,10 @@
 import { supabase } from '../config/supabase.js';
 import { env } from '../env.js';
-import { isSupportedBlockchain, type SupportedBlockchain } from '../transactionQueueTypes.js';
+import { formatConfiguredBlockchains, resolveConfiguredBlockchain } from '../config/chains.js';
+import type { BlockchainId } from '../transactionQueueTypes.js';
 
 export interface FullGameData {
-  blockchain?: SupportedBlockchain;
+  blockchain?: unknown;
   [key: string]: unknown;
 }
 
@@ -72,15 +73,17 @@ export async function fetchFullGameData(gameId: number, options: FetchFullGameDa
 export async function fetchGameBlockchain(
   gameId: number,
   options: FetchFullGameDataOptions = {}
-): Promise<SupportedBlockchain> {
+): Promise<BlockchainId> {
   const data = await fetchFullGameData(gameId, options);
+  const blockchain = resolveConfiguredBlockchain(data.blockchain);
 
-  if (isSupportedBlockchain(data.blockchain)) {
-    return data.blockchain;
+  if (blockchain) {
+    return blockchain;
   }
 
-  console.warn(`⚠️  FULL_GAME_API_URL did not include a valid blockchain for game_id=${gameId}. Falling back to starknet.`);
-  return 'starknet';
+  throw new Error(
+    `FULL_GAME_API_URL did not include a valid blockchain for game_id=${gameId}. Received ${String(data.blockchain)}. Supported values: ${formatConfiguredBlockchains()}`
+  );
 }
 
 /**
