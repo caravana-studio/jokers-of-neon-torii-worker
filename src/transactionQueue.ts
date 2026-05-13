@@ -1,28 +1,15 @@
-import { Account, Call, RpcProvider } from 'starknet';
-import { env } from './env.js';
 import { supabase } from './config/supabase.js';
+import { env, getWorkerBlockchainFilter } from './env.js';
+import { executeIntent, isRegisteredBlockchain } from './blockchainAdapters/index.js';
+import {
+  isTransactionOperation,
+  type EnqueueTransactionParams,
+  type QueuedIntent,
+  type TransactionResult,
+  type TransactionStatus,
+} from './transactionQueueTypes.js';
 
-/**
- * Transaction item to be queued
- */
-export interface QueuedTransaction {
-  id: string;
-  contractAddress: string;
-  entrypoint: string;
-  calldata: any[];
-  retries: number;
-  maxRetries: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-}
-
-/**
- * Result of a transaction execution
- */
-export interface TransactionResult {
-  success: boolean;
-  transactionHash?: string;
-  error?: Error;
-}
+const INTENT_QUEUE_TABLE = 'torii_worker_intent_queue';
 
 /**
  * Persistent Transaction Queue Manager
@@ -31,24 +18,10 @@ export interface TransactionResult {
 export class TransactionQueue {
   private processing = false;
   private currentTransactionId: string | null = null;
-  private provider: RpcProvider;
-  private account: Account;
   private useSupabase: boolean;
+  private blockchainFilter = getWorkerBlockchainFilter();
 
   constructor() {
-    // Create provider
-    this.provider = new RpcProvider({
-      nodeUrl: env.STARKNET_RPC_URL,
-      default: true
-    });
-
-    // Create account
-    this.account = new Account({
-      provider: this.provider,
-      address: env.STARKNET_ADDRESS,
-      signer: env.STARKNET_PRIVATE_KEY,
-    });
-
     // Check if Supabase is configured
     this.useSupabase = !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 
@@ -68,16 +41,25 @@ export class TransactionQueue {
     }
 
     console.log('💼 Transaction Queue: Initializing with Supabase...');
+    if (this.blockchainFilter) {
+      console.log(`💼 Transaction Queue: filtering blockchains=${this.blockchainFilter.join(',')}`);
+    }
 
     try {
       // Recover any transactions that were being processed when the worker crashed
       await this.recoverOrphanedTransactions();
 
       // Count pending transactions
-      const { count, error } = await supabase
-        .from('torii_worker_transaction_queue')
+      let countQuery = supabase
+        .from(INTENT_QUEUE_TABLE)
         .select('*', { count: 'exact', head: true })
         .eq('status', 'pending');
+
+      if (this.blockchainFilter) {
+        countQuery = countQuery.in('blockchain', this.blockchainFilter);
+      }
+
+      const { count, error } = await countQuery;
 
       if (error) throw error;
 
@@ -102,11 +84,16 @@ export class TransactionQueue {
    */
   private async recoverOrphanedTransactions(): Promise<void> {
     try {
-      const { data, error } = await supabase
-        .from('torii_worker_transaction_queue')
+      let recoverQuery = supabase
+        .from(INTENT_QUEUE_TABLE)
         .update({ status: 'pending' })
-        .eq('status', 'processing')
-        .select();
+        .eq('status', 'processing');
+
+      if (this.blockchainFilter) {
+        recoverQuery = recoverQuery.in('blockchain', this.blockchainFilter);
+      }
+
+      const { data, error } = await recoverQuery.select();
 
       if (error) throw error;
 
@@ -121,30 +108,29 @@ export class TransactionQueue {
   /**
    * Add a transaction to the queue
    */
-  public async enqueue(params: {
-    contractAddress: string;
-    entrypoint: string;
-    calldata: any[];
-    maxRetries?: number;
-  }): Promise<string> {
+  public async enqueue(params: EnqueueTransactionParams): Promise<string> {
     const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const maxRetries = params.maxRetries ?? 3;
 
     console.log(`\n📥 Adding transaction to queue`);
     console.log(`   ID:         ${id}`);
-    console.log(`   Contract:   ${params.contractAddress}`);
-    console.log(`   Entrypoint: ${params.entrypoint}`);
+    console.log(`   Blockchain: ${params.blockchain}`);
+    console.log(`   Operation:  ${params.operation}`);
+    console.log(`   Target:     ${params.targetRef ?? 'default'}`);
 
     if (this.useSupabase) {
       try {
         // Save to Supabase
         const { error } = await supabase
-          .from('torii_worker_transaction_queue')
+          .from(INTENT_QUEUE_TABLE)
           .insert({
             id,
-            contract_address: params.contractAddress,
-            entrypoint: params.entrypoint,
-            calldata: params.calldata,
+            blockchain: params.blockchain,
+            operation: params.operation,
+            target_ref: params.targetRef ?? null,
+            payload: params.payload,
+            intent_version: params.intentVersion ?? 1,
+            metadata: params.metadata ?? {},
             status: 'pending',
             retries: 0,
             max_retries: maxRetries,
@@ -154,7 +140,7 @@ export class TransactionQueue {
 
         // Get queue size
         const { count } = await supabase
-          .from('torii_worker_transaction_queue')
+          .from(INTENT_QUEUE_TABLE)
           .select('*', { count: 'exact', head: true })
           .eq('status', 'pending');
 
@@ -197,8 +183,9 @@ export class TransactionQueue {
 
       console.log(`\n⚙️  Processing transaction from queue`);
       console.log(`   ID:         ${transaction.id}`);
-      console.log(`   Contract:   ${transaction.contractAddress}`);
-      console.log(`   Entrypoint: ${transaction.entrypoint}`);
+      console.log(`   Blockchain: ${transaction.blockchain}`);
+      console.log(`   Operation:  ${transaction.operation}`);
+      console.log(`   Target:     ${transaction.targetRef ?? 'default'}`);
       console.log(`   Attempt:    ${transaction.retries + 1}/${transaction.maxRetries + 1}`);
 
       // Mark as processing
@@ -258,16 +245,22 @@ export class TransactionQueue {
   /**
    * Get the next pending transaction from the queue
    */
-  private async getNextTransaction(): Promise<QueuedTransaction | null> {
+  private async getNextTransaction(): Promise<QueuedIntent | null> {
     if (!this.useSupabase) {
       return null;
     }
 
     try {
-      const { data, error } = await supabase
-        .from('torii_worker_transaction_queue')
+      let nextQuery = supabase
+        .from(INTENT_QUEUE_TABLE)
         .select('*')
-        .eq('status', 'pending')
+        .eq('status', 'pending');
+
+      if (this.blockchainFilter) {
+        nextQuery = nextQuery.in('blockchain', this.blockchainFilter);
+      }
+
+      const { data, error } = await nextQuery
         .order('created_at', { ascending: true })
         .limit(1)
         .single();
@@ -282,14 +275,31 @@ export class TransactionQueue {
 
       if (!data) return null;
 
+      if (!isRegisteredBlockchain(data.blockchain)) {
+        await this.updateTransactionStatus(data.id, 'failed', {
+          errorMessage: `Unsupported blockchain: ${String(data.blockchain)}`,
+        });
+        return this.getNextTransaction();
+      }
+
+      if (!isTransactionOperation(data.operation)) {
+        await this.updateTransactionStatus(data.id, 'failed', {
+          errorMessage: `Unsupported operation: ${String(data.operation)}`,
+        });
+        return this.getNextTransaction();
+      }
+
       return {
         id: data.id,
-        contractAddress: data.contract_address,
-        entrypoint: data.entrypoint,
-        calldata: data.calldata,
+        blockchain: data.blockchain,
+        operation: data.operation,
+        targetRef: data.target_ref ?? undefined,
+        payload: (data.payload ?? {}) as Record<string, unknown>,
+        intentVersion: data.intent_version ?? 1,
+        metadata: (data.metadata ?? {}) as Record<string, unknown>,
         retries: data.retries,
         maxRetries: data.max_retries,
-        status: data.status as any,
+        status: data.status as TransactionStatus,
       };
     } catch (error) {
       console.error('❌ Error fetching next transaction:', error);
@@ -302,7 +312,7 @@ export class TransactionQueue {
    */
   private async updateTransactionStatus(
     id: string,
-    status: 'pending' | 'processing' | 'completed' | 'failed',
+    status: TransactionStatus,
     extra?: { transactionHash?: string; errorMessage?: string }
   ): Promise<void> {
     if (!this.useSupabase) {
@@ -324,8 +334,8 @@ export class TransactionQueue {
         updateData.error_message = extra.errorMessage;
       }
 
-      const { error, count } = await supabase
-        .from('torii_worker_transaction_queue')
+      const { error, data } = await supabase
+        .from(INTENT_QUEUE_TABLE)
         .update(updateData)
         .eq('id', id)
         .select();
@@ -335,10 +345,10 @@ export class TransactionQueue {
         throw error;
       }
 
-      if (!count || count === 0) {
+      if (!data || data.length === 0) {
         console.warn(`⚠️  No rows updated for transaction ${id}`);
       } else {
-        console.log(`🔄 Status updated: ${id} -> ${status} (${count} row(s))`);
+        console.log(`🔄 Status updated: ${id} -> ${status} (${data.length} row(s))`);
       }
     } catch (error) {
       console.error('❌ Error updating transaction status:', error);
@@ -357,7 +367,7 @@ export class TransactionQueue {
 
     try {
       const { error } = await supabase
-        .from('torii_worker_transaction_queue')
+        .from(INTENT_QUEUE_TABLE)
         .update({
           retries,
           status: 'pending' // Mark as pending for retry
@@ -373,47 +383,8 @@ export class TransactionQueue {
   /**
    * Execute a single transaction
    */
-  private async executeTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
-    try {
-      console.log(`\n📤 Executing transaction on Starknet...`);
-      console.log(`   Contract:   ${transaction.contractAddress}`);
-      console.log(`   Entrypoint: ${transaction.entrypoint}`);
-      console.log(`   Calldata:   ${JSON.stringify(transaction.calldata)}`);
-
-      // Prepare the call
-      const call: Call = {
-        contractAddress: transaction.contractAddress,
-        entrypoint: transaction.entrypoint,
-        calldata: transaction.calldata
-      };
-
-      console.log(`[${new Date().toISOString()}] Executing ${call.entrypoint} on Starknet...`);
-
-      // Execute transaction
-      const starknetNonce = await this.account.getNonce();
-      const { transaction_hash } = await this.account.execute(call, {
-        nonce: starknetNonce,
-        skipValidate: true,
-      });
-
-      console.log(`✅ Transaction sent: ${transaction_hash}`);
-
-      // Wait for confirmation
-      console.log('⏳ Waiting for confirmation...');
-      await this.account.waitForTransaction(transaction_hash);
-
-      console.log(`✅ Transaction confirmed: ${transaction_hash}\n`);
-
-      return {
-        success: true,
-        transactionHash: transaction_hash
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error instanceof Error ? error : new Error(String(error))
-      };
-    }
+  private async executeTransaction(transaction: QueuedIntent): Promise<TransactionResult> {
+    return executeIntent(transaction);
   }
 
   /**
@@ -438,10 +409,10 @@ export class TransactionQueue {
 
     try {
       const [pending, processing, completed, failed] = await Promise.all([
-        supabase.from('torii_worker_transaction_queue').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-        supabase.from('torii_worker_transaction_queue').select('*', { count: 'exact', head: true }).eq('status', 'processing'),
-        supabase.from('torii_worker_transaction_queue').select('*', { count: 'exact', head: true }).eq('status', 'completed'),
-        supabase.from('torii_worker_transaction_queue').select('*', { count: 'exact', head: true }).eq('status', 'failed'),
+        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'processing'),
+        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'completed'),
+        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'failed'),
       ]);
 
       return {

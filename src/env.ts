@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
+import { formatConfiguredBlockchains, isConfiguredBlockchain } from './config/chains.js';
+import type { BlockchainId } from './transactionQueueTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,6 +19,13 @@ export const env = {
   STARKNET_RPC_API_KEY: process.env.STARKNET_RPC_API_KEY || '',
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || '',
+
+  // Celo / EVM Configuration (Optional - used for EVM execution)
+  CELO_RPC_URL: process.env.CELO_RPC_URL || '',
+  CELO_PRIVATE_KEY: process.env.CELO_PRIVATE_KEY || '',
+  CELO_ADDRESS: process.env.CELO_ADDRESS || '',
+  CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS: process.env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS || '',
+  WORKER_BLOCKCHAIN_FILTER: process.env.WORKER_BLOCKCHAIN_FILTER || '',
 
   // XP System Contract
   XP_SYSTEM_CONTRACT_ADDRESS: process.env.XP_SYSTEM_CONTRACT_ADDRESS || '',
@@ -60,6 +69,41 @@ function validateConfig() {
       console.warn('⚠️  El bot funcionará en modo solo lectura');
     }
   }
+
+  if (env.CELO_PRIVATE_KEY) {
+    const celoRequired = ['CELO_RPC_URL'];
+    const celoMissing = celoRequired.filter(key => !env[key as keyof typeof env]);
+
+    if (celoMissing.length > 0) {
+      console.warn(`⚠️  Configuración de Celo incompleta: ${celoMissing.join(', ')}`);
+    }
+
+    if (!env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS) {
+      console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS');
+    }
+  }
 }
 
 validateConfig();
+
+export function getWorkerBlockchainFilter(): BlockchainId[] | null {
+  const values = env.WORKER_BLOCKCHAIN_FILTER
+    .split(',')
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (values.length === 0) {
+    return null;
+  }
+
+  const invalid = values.filter(value => !isConfiguredBlockchain(value));
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid WORKER_BLOCKCHAIN_FILTER value(s): ${invalid.join(', ')}. Supported values: ${formatConfiguredBlockchains()}`
+    );
+  }
+
+  const parsed = values.filter(isConfiguredBlockchain);
+
+  return Array.from(new Set(parsed));
+}

@@ -178,9 +178,17 @@ export class PackDistributionService {
 
       // Enqueue transaction
       const txId = await this.txQueue.enqueue({
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'add_claimable_pack',
-        calldata: [player.owner, packId.toString()],
+        blockchain: 'starknet',
+        operation: 'pack.claimable.add',
+        targetRef: 'profile_system',
+        payload: {
+          player: player.owner,
+          packId,
+        },
+        metadata: {
+          source: 'leaderboard_reward_distribution',
+          playerName: player.player_name,
+        },
       });
 
       return txId;

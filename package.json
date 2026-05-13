@@ -20,6 +20,7 @@
     "@supabase/supabase-js": "^2.86.0",
     "dotenv": "^16.4.7",
     "starknet": "8.6.0",
+    "viem": "^2.48.11",
     "websocket": "^1.0.35"
   },
   "devDependencies": {

@@ -1,14 +1,18 @@
 import { w3cwebsocket } from 'websocket';
 import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
-import { env } from './env.js';
-import { dojoConfig } from './dojoConfig.js';
-import { getGameData, getGameSpecials, buildGameDataCalldata, getPlayerStats, buildPlayerStatsCalldata, buildRoundDataCalldata } from './starknetExecutor.js';
+import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
-import { fetchAndSaveGameStep, EmptyGameDataError } from './services/gameStepsService.js';
+import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
 import { getCronScheduler } from './cron/cronScheduler.js';
 import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
 import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
+import {
+  getAllBlockchainEventHandlers,
+  getBlockchainEventHandler,
+  type BlockchainEventHandler,
+} from './blockchainEventHandlers.js';
+import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 
 // Configuración necesaria para WebSocket en Node.js
 // @ts-ignore
@@ -21,12 +25,74 @@ const txQueue = getTransactionQueue();
 
 // Initialize cron scheduler
 const cronScheduler = getCronScheduler();
+const workerBlockchainFilter = getWorkerBlockchainFilter();
 
 console.log('🎮 Jokers of Neon - Event Listener');
 console.log('═'.repeat(60));
 console.log(`Slot Env:     ${env.MANIFEST_SLOT_ENV}`);
 console.log('═'.repeat(60));
 console.log('');
+
+async function resolveGameBlockchain(
+  gameId: number,
+  options: { logTarget?: boolean; logFetch?: boolean } = {}
+): Promise<BlockchainId> {
+  const { logTarget = true, logFetch = true } = options;
+  const blockchain = await fetchGameBlockchain(gameId, { logRequest: logFetch });
+
+  if (logTarget) {
+    console.log(`   Target blockchain: ${blockchain}`);
+  }
+
+  return blockchain;
+}
+
+async function enqueueTransactions(transactions: EnqueueTransactionParams[]): Promise<void> {
+  for (const transaction of transactions) {
+    await txQueue.enqueue(transaction);
+  }
+}
+
+function shouldProcessBlockchain(blockchain: BlockchainId): boolean {
+  return !workerBlockchainFilter || workerBlockchainFilter.includes(blockchain);
+}
+
+function getEnabledBlockchainEventHandlers(): BlockchainEventHandler[] {
+  if (!workerBlockchainFilter) {
+    return getAllBlockchainEventHandlers();
+  }
+
+  return getAllBlockchainEventHandlers().filter(handler =>
+    workerBlockchainFilter.includes(handler.blockchain)
+  );
+}
+
+function logTransactionBuildResult(label: string, transactions: EnqueueTransactionParams[]): void {
+  if (transactions.length === 0) {
+    console.log(`ℹ️  ${label}: no blockchain handler produced transactions\n`);
+    return;
+  }
+
+  console.log(`✅ ${label}: queued ${transactions.length} transaction(s)\n`);
+}
+
+async function buildTransactionsForAllChains(
+  build: (handler: BlockchainEventHandler) => Promise<EnqueueTransactionParams[]>
+): Promise<EnqueueTransactionParams[]> {
+  const transactionGroups = await Promise.all(
+    getEnabledBlockchainEventHandlers().map(handler => build(handler))
+  );
+
+  return transactionGroups.flat();
+}
+
+async function buildTransactionsForGameBlockchain(
+  blockchain: BlockchainId,
+  build: (blockchain: BlockchainId) => Promise<EnqueueTransactionParams[]>
+): Promise<EnqueueTransactionParams[]> {
+  console.log(`   Target blockchain: ${blockchain}`);
+  return build(blockchain);
+}
 
 /**
  * Handles daily mission completed event
@@ -37,21 +103,15 @@ async function handleDailyMissionCompleted(player: string, missionId: string, mi
   console.log(`   Mission Type: ${missionType}`);
 
   try {
-    // Check if Starknet executor is configured
-    if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  XP System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    // Add transaction to queue instead of executing directly
-    txQueue.enqueue({
-      contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_daily_mission_xp',
-      calldata: [player, missionType],
-    });
-
-    console.log('✅ Daily mission XP transaction queued successfully\n');
+    const transactions = await buildTransactionsForGameBlockchain('starknet', selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions({
+        player,
+        missionId,
+        missionType,
+      })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Daily mission completed', transactions);
   } catch (error) {
     console.error('❌ Error queueing daily mission XP transaction:', error);
   }
@@ -85,13 +145,11 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
     }
   } catch (error) {
     if (error instanceof EmptyGameDataError) {
-      // API returned empty data - this is not a critical error, just skip saving
       console.warn(`⚠️  Skipping game step: ${error.message}`);
     } else {
-      // Other errors (network, API down, etc.)
       console.error('❌ Error saving game step:', error);
     }
-    // Worker continues running - errors don't stop the listener
+
     console.log('👂 Continuing to listen for events...\n');
   }
 }
@@ -99,35 +157,16 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
 /**
  * Handles game won event
  */
-async function handlePlayWinGame(player: string, gameId: number) {
+async function handlePlayWinGame(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game won for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Check if Profile System is configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS) {
-      console.log('ℹ️  Profile System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    // Get game data from Game View
-    const { game, round } = await getGameData(gameId);
-    const roundDataCalldata = buildRoundDataCalldata(game, round, player);
-    await txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'set_round_data',
-      calldata: roundDataCalldata,
-    });
-    const specials = await getGameSpecials(gameId);
-    const gameDataCalldata = buildGameDataCalldata(game, specials);
-    await txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'set_game_data',
-      calldata: gameDataCalldata,
-    });
-
-    console.log('✅ Game data transaction queued successfully\n');
+    const transactions = await buildTransactionsForGameBlockchain(blockchain, async selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildPlayWinGameTransactions({ player, gameId })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Play win game', transactions);
   } catch (error) {
     console.error('❌ Error recording won game:', error);
   }
@@ -136,36 +175,16 @@ async function handlePlayWinGame(player: string, gameId: number) {
 /**
  * Handles game over event
  */
-async function handleGameOver(player: string, gameId: number) {
+async function handleGameOver(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game over for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Check if Profile System is configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Profile System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    // Get game data and queue transactions
-    const { game } = await getGameData(gameId);
-    const specials = await getGameSpecials(gameId);
-    const gameDataCalldata = buildGameDataCalldata(game, specials);
-    txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'set_game_data',
-      calldata: gameDataCalldata,
-    });
-    const playerStats = await getPlayerStats(gameId);
-    const playerStatsCalldata = buildPlayerStatsCalldata(player, playerStats);
-    txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_stats',
-      calldata: playerStatsCalldata,
-    });
-
-    console.log('✅ Player stats transaction queued successfully\n');
+    const transactions = await buildTransactionsForGameBlockchain(blockchain, async selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildPlayGameOverTransactions({ player, gameId })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Play game over', transactions);
   } catch (error) {
     console.error('❌ Error recording game over:', error);
   }
@@ -174,55 +193,17 @@ async function handleGameOver(player: string, gameId: number) {
 /**
  * Handles create game event
  */
-async function handleCreateGame(player: string, gameId: number) {
+async function handleCreateGame(player: string, gameId: number, blockchain: BlockchainId) {
   console.log(`\n🔄 Processing game creation for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
 
   try {
-    // Check if Profile System is configured
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Profile System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
     console.log('🎮 Recording game played in stats...');
-
-    // Create PlayerStats with only games_played = 1, rest = 0
-    const playerStatsCalldata = [
-      player,                // address
-      '1',                   // games_played
-      '0',                   // games_won
-      '0',                   // high_card_played
-      '0',                   // pair_played
-      '0',                   // two_pair_played
-      '0',                   // three_of_a_kind_played
-      '0',                   // four_of_a_kind_played
-      '0',                   // five_of_a_kind_played
-      '0',                   // full_house_played
-      '0',                   // flush_played
-      '0',                   // straight_played
-      '0',                   // straight_flush_played
-      '0',                   // royal_flush_played
-      '0',                   // loot_boxes_purchased
-      '0',                   // cards_purchased
-      '0',                   // specials_purchased
-      '0',                   // specials_sold
-      '0',                   // power_ups_purchased
-      '0',                   // level_ups_purchased
-      '0',                   // modifiers_purchased
-      '0',                   // rerolls_purchased
-      '0'                    // burn_purchased
-    ];
-
-    // Add stats transaction to queue
-    txQueue.enqueue({
-      contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_stats',
-      calldata: playerStatsCalldata,
-    });
-
-    console.log('✅ Game played stats transaction queued successfully\n');
+    const transactions = await buildTransactionsForGameBlockchain(blockchain, async selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildCreateGameTransactions({ player, gameId })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Create game', transactions);
   } catch (error) {
     console.error('❌ Error recording game creation:', error);
   }
@@ -237,19 +218,11 @@ async function handleProgressionUpdated(player: string, tier: number, totalRuns:
   console.log(`   Tier: ${tier}, Total Runs: ${totalRuns}, Max Level: ${maxLevel}, Max Round: ${maxRound}`);
 
   try {
-    if (!env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Progression System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    txQueue.enqueue({
-      contractAddress: env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'sync_progression',
-      calldata: [player, tier.toString(), totalRuns.toString(), maxLevel.toString(), maxRound.toString()],
-    });
-
-    console.log('✅ Progression event detected successfully (dry run)\n');
+    const transactions = await buildTransactionsForAllChains(handler =>
+      handler.buildProgressionUpdatedTransactions({ player, tier, totalRuns, maxLevel, maxRound })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Progression updated', transactions);
   } catch (error) {
     console.error('❌ Error processing progression event:', error);
   }
@@ -258,37 +231,29 @@ async function handleProgressionUpdated(player: string, tier: number, totalRuns:
 /**
  * Handles level passed event
  */
-async function handleLevelPassed(player: string, gameId: number, previousLevel: number, newLevel: number) {
+async function handleLevelPassed(
+  player: string,
+  gameId: number,
+  previousLevel: number,
+  newLevel: number,
+  blockchain: BlockchainId
+) {
   console.log(`\n🔄 Processing level passed for ${player}...`);
   console.log(`   Game ID: ${gameId}`);
   console.log(`   Previous Level: ${previousLevel}`);
   console.log(`   New Level: ${newLevel}`);
 
   try {
-    // Check if XP System is configured
-    if (!env.XP_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  XP System not configured (read-only mode)');
-      console.log('✅ Event processed (without executing transaction)\n');
-      return;
-    }
-
-    // Add transaction to queue instead of executing directly
-    txQueue.enqueue({
-      contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
-      entrypoint: 'add_level_completion_xp',
-      calldata: [player, previousLevel.toString()],
-    });
-
-    if (newLevel === 4) {
-      const playerStatsCalldata = [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
-      txQueue.enqueue({
-        contractAddress: env.PROFILE_SYSTEM_CONTRACT_ADDRESS,
-        entrypoint: 'add_stats',
-        calldata: playerStatsCalldata,
-      });
-      console.log('✅ Game won stats transaction queued successfully\n');
-    }
-    
+    const transactions = await buildTransactionsForGameBlockchain(blockchain, async selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildLevelPassedTransactions({
+        player,
+        gameId,
+        previousLevel,
+        newLevel,
+      })
+    );
+    await enqueueTransactions(transactions);
+    logTransactionBuildResult('Level passed', transactions);
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
   }
@@ -357,21 +322,22 @@ async function createWorker() {
             if (coreModels.MissionCompletedEvent) {
               const event = coreModels.MissionCompletedEvent;
 
-              console.log('\n📊 MissionCompletedEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
-              console.log(`   Mission ID:    ${event.id || 'N/A'}`);
-              console.log(`   Mission Type:  ${event.mission_type || 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
-              // Process the event
               if (event.player && event.id !== undefined && event.mission_type !== undefined) {
-                await handleDailyMissionCompleted(
-                  event.player,
-                  event.id.toString(),
-                  event.mission_type.toString()
-                );
+                if (shouldProcessBlockchain('starknet')) {
+                  console.log('\n🎯 MissionCompletedEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Mission ID:    ${event.id}`);
+                  console.log(`   Mission Type:  ${event.mission_type}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleDailyMissionCompleted(
+                    event.player,
+                    String(event.id),
+                    String(event.mission_type)
+                  );
+                }
               } else {
                 console.log('⚠️  Incomplete MissionCompletedEvent - will not be processed');
               }
@@ -381,16 +347,21 @@ async function createWorker() {
             if (coreModels.CreateGameEvent) {
               const event = coreModels.CreateGameEvent;
 
-              console.log('\n🎮 CreateGameEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
-              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
               // Process the event
               if (event.player && event.game_id !== undefined) {
-                await handleCreateGame(event.player, event.game_id);
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
+
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n🎮 CreateGameEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Game ID:       ${gameId}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleCreateGame(event.player, gameId, blockchain);
+                }
               } else {
                 console.log('⚠️  Incomplete CreateGameEvent - will not be processed');
               }
@@ -400,16 +371,21 @@ async function createWorker() {
             if (coreModels.CurrentHandEvent) {
               const event = coreModels.CurrentHandEvent;
 
-              console.log('\n🎮 CurrentHandEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-              console.log(`   Cards:         ${event.cards ? `[${event.cards.join(', ')}]` : 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
               // Process the event
               if (event.game_id !== undefined && event.cards !== undefined) {
-                await handleCurrentHand(event.game_id, event.cards);
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
+
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n🎮 CurrentHandEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Game ID:       ${gameId}`);
+                  console.log(`   Cards:         [${event.cards.join(', ')}]`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleCurrentHand(gameId, event.cards);
+                }
               } else {
                 console.log('⚠️  Incomplete CurrentHandEvent - will not be processed');
               }
@@ -419,16 +395,21 @@ async function createWorker() {
             if (coreModels.PlayWinGameEvent) {
               const event = coreModels.PlayWinGameEvent;
 
-              console.log('\n🏆 PlayWinGameEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
-              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
               // Process the event
               if (event.player && event.game_id !== undefined) {
-                await handlePlayWinGame(event.player, event.game_id);
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
+
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n🏆 PlayWinGameEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Game ID:       ${gameId}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handlePlayWinGame(event.player, gameId, blockchain);
+                }
               } else {
                 console.log('⚠️  Incomplete PlayWinGameEvent - will not be processed');
               }
@@ -438,16 +419,21 @@ async function createWorker() {
             if (coreModels.PlayGameOverEvent) {
               const event = coreModels.PlayGameOverEvent;
 
-              console.log('\n🏁 PlayGameOverEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
-              console.log(`   Game ID:       ${event.game_id || 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
               // Process the event
               if (event.player && event.game_id !== undefined) {
-                await handleGameOver(event.player, event.game_id);
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
+
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n🏁 PlayGameOverEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Game ID:       ${gameId}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleGameOver(event.player, gameId, blockchain);
+                }
               } else {
                 console.log('⚠️  Incomplete PlayGameOverEvent - will not be processed');
               }
@@ -457,23 +443,29 @@ async function createWorker() {
             if (coreModels.LevelPassedEvent) {
               const event = coreModels.LevelPassedEvent;
 
-              console.log('\n⬆️  LevelPassedEvent found!');
-              console.log(`   Entity ID:       ${entityId}`);
-              console.log(`   Player:          ${event.player || 'N/A'}`);
-              console.log(`   Game ID:         ${event.game_id || 'N/A'}`);
-              console.log(`   Previous Level:  ${event.previous_level || 'N/A'}`);
-              console.log(`   New Level:       ${event.new_level || 'N/A'}`);
-              console.log(`   Timestamp:       ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
-
               // Process the event
               if (event.player && event.game_id !== undefined && event.previous_level !== undefined && event.new_level !== undefined) {
-                await handleLevelPassed(
-                  event.player,
-                  Number(event.game_id),
-                  Number(event.previous_level),
-                  Number(event.new_level)
-                );
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
+
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n⬆️  LevelPassedEvent found!');
+                  console.log(`   Entity ID:       ${entityId}`);
+                  console.log(`   Player:          ${event.player || 'N/A'}`);
+                  console.log(`   Game ID:         ${gameId}`);
+                  console.log(`   Previous Level:  ${event.previous_level || 'N/A'}`);
+                  console.log(`   New Level:       ${event.new_level || 'N/A'}`);
+                  console.log(`   Timestamp:       ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleLevelPassed(
+                    event.player,
+                    gameId,
+                    Number(event.previous_level),
+                    Number(event.new_level),
+                    blockchain
+                  );
+                }
               } else {
                 console.log('⚠️  Incomplete LevelPassedEvent - will not be processed');
               }
