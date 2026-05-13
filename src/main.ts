@@ -210,16 +210,32 @@ async function handleCreateGame(player: string, gameId: number, blockchain: Bloc
 }
 
 /**
- * Handles progression updated event
- * Syncs player progression from Core (Slot) to Profile (Mainnet)
+ * Handles progression game update event
+ * Syncs player progression only to the blockchain that owns the game.
  */
-async function handleProgressionUpdated(player: string, tier: number, totalRuns: number, maxLevel: number, maxRound: number) {
+async function handleProgressionUpdated(
+  player: string,
+  gameId: number,
+  tier: number,
+  totalRuns: number,
+  maxLevel: number,
+  maxRound: number,
+  blockchain: BlockchainId
+) {
   console.log(`\n🔄 Processing progression update for ${player}...`);
+  console.log(`   Game ID: ${gameId}`);
   console.log(`   Tier: ${tier}, Total Runs: ${totalRuns}, Max Level: ${maxLevel}, Max Round: ${maxRound}`);
 
   try {
-    const transactions = await buildTransactionsForAllChains(handler =>
-      handler.buildProgressionUpdatedTransactions({ player, tier, totalRuns, maxLevel, maxRound })
+    const transactions = await buildTransactionsForGameBlockchain(blockchain, selectedBlockchain =>
+      getBlockchainEventHandler(selectedBlockchain).buildProgressionUpdatedTransactions({
+        player,
+        gameId,
+        tier,
+        totalRuns,
+        maxLevel,
+        maxRound,
+      })
     );
     await enqueueTransactions(transactions);
     logTransactionBuildResult('Progression updated', transactions);
@@ -471,30 +487,45 @@ async function createWorker() {
               }
             }
 
-            // Check if ProgressionUpdatedEvent exists
-            if (coreModels.ProgressionUpdatedEvent) {
-              const event = coreModels.ProgressionUpdatedEvent;
+            // Check if ProgressionGameUpdateEvent exists
+            if (coreModels.ProgressionGameUpdateEvent) {
+              const event = coreModels.ProgressionGameUpdateEvent;
 
-              console.log('\n📈 ProgressionUpdatedEvent found!');
-              console.log(`   Entity ID:     ${entityId}`);
-              console.log(`   Player:        ${event.player || 'N/A'}`);
-              console.log(`   Tier:          ${event.tier ?? 'N/A'}`);
-              console.log(`   Total Runs:    ${event.total_runs ?? 'N/A'}`);
-              console.log(`   Max Level:     ${event.max_level ?? 'N/A'}`);
-              console.log(`   Max Round:     ${event.max_round ?? 'N/A'}`);
-              console.log(`   Timestamp:     ${new Date().toISOString()}`);
-              console.log('─'.repeat(60));
+              if (
+                event.player &&
+                event.game_id !== undefined &&
+                event.tier !== undefined &&
+                event.total_runs !== undefined &&
+                event.max_level !== undefined &&
+                event.max_round !== undefined
+              ) {
+                const gameId = Number(event.game_id);
+                const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
-              if (event.player && event.tier !== undefined && event.total_runs !== undefined && event.max_level !== undefined && event.max_round !== undefined) {
-                await handleProgressionUpdated(
-                  event.player,
-                  Number(event.tier),
-                  Number(event.total_runs),
-                  Number(event.max_level),
-                  Number(event.max_round)
-                );
+                if (shouldProcessBlockchain(blockchain)) {
+                  console.log('\n📈 ProgressionGameUpdateEvent found!');
+                  console.log(`   Entity ID:     ${entityId}`);
+                  console.log(`   Player:        ${event.player || 'N/A'}`);
+                  console.log(`   Game ID:       ${gameId}`);
+                  console.log(`   Tier:          ${event.tier ?? 'N/A'}`);
+                  console.log(`   Total Runs:    ${event.total_runs ?? 'N/A'}`);
+                  console.log(`   Max Level:     ${event.max_level ?? 'N/A'}`);
+                  console.log(`   Max Round:     ${event.max_round ?? 'N/A'}`);
+                  console.log(`   Timestamp:     ${new Date().toISOString()}`);
+                  console.log('─'.repeat(60));
+
+                  await handleProgressionUpdated(
+                    event.player,
+                    gameId,
+                    Number(event.tier),
+                    Number(event.total_runs),
+                    Number(event.max_level),
+                    Number(event.max_round),
+                    blockchain
+                  );
+                }
               } else {
-                console.log('⚠️  Incomplete ProgressionUpdatedEvent - will not be processed');
+                console.log('⚠️  Incomplete ProgressionGameUpdateEvent - will not be processed');
               }
             }
 
@@ -519,7 +550,7 @@ async function createWorker() {
       'jokers_of_neon_core-PlayWinGameEvent',
       'jokers_of_neon_core-PlayGameOverEvent',
       'jokers_of_neon_core-LevelPassedEvent',
-      'jokers_of_neon_core-ProgressionUpdatedEvent'
+      'jokers_of_neon_core-ProgressionGameUpdateEvent'
     ])
     .withDirection('Backward')
     .withLimit(10);
@@ -558,7 +589,7 @@ async function createWorker() {
   console.log('   - PlayWinGameEvent');
   console.log('   - PlayGameOverEvent');
   console.log('   - LevelPassedEvent');
-  console.log('   - ProgressionUpdatedEvent\n');
+  console.log('   - ProgressionGameUpdateEvent\n');
   console.log('Press Ctrl+C to stop\n');
 
   // Keep the process alive

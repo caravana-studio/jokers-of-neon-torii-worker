@@ -24,8 +24,9 @@ export interface LevelPassedEventData extends GameEventData {
   newLevel: number;
 }
 
-export interface ProgressionUpdatedEventData {
+export interface ProgressionGameUpdateEventData {
   player: string;
+  gameId: number;
   tier: number;
   totalRuns: number;
   maxLevel: number;
@@ -39,7 +40,7 @@ export interface BlockchainEventHandler {
   buildPlayWinGameTransactions(event: GameEventData): Promise<EnqueueTransactionParams[]>;
   buildPlayGameOverTransactions(event: GameEventData): Promise<EnqueueTransactionParams[]>;
   buildLevelPassedTransactions(event: LevelPassedEventData): Promise<EnqueueTransactionParams[]>;
-  buildProgressionUpdatedTransactions(event: ProgressionUpdatedEventData): Promise<EnqueueTransactionParams[]>;
+  buildProgressionUpdatedTransactions(event: ProgressionGameUpdateEventData): Promise<EnqueueTransactionParams[]>;
 }
 
 function hasStarknetWriteConfig(...contractAddresses: string[]): boolean {
@@ -93,7 +94,7 @@ function roundSnapshotIntent(
 function progressionIntent(
   blockchain: BlockchainId,
   player: string,
-  event: Omit<ProgressionUpdatedEventData, 'player'>
+  event: Omit<ProgressionGameUpdateEventData, 'player'>
 ): EnqueueTransactionParams {
   return {
     blockchain,
@@ -106,7 +107,10 @@ function progressionIntent(
       maxLevel: event.maxLevel,
       maxRound: event.maxRound,
     },
-    metadata: { sourceEvent: 'ProgressionUpdatedEvent' },
+    metadata: {
+      sourceEvent: 'ProgressionGameUpdateEvent',
+      gameId: event.gameId,
+    },
   };
 }
 
