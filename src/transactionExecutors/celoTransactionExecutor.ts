@@ -60,6 +60,43 @@ const celoProfileAbi = [
   },
   {
     type: 'function',
+    name: 'addPlayerStats',
+    stateMutability: 'nonpayable',
+    inputs: [
+      {
+        name: 'playerStats',
+        type: 'tuple',
+        components: [
+          { name: 'player', type: 'address' },
+          { name: 'gamesPlayed', type: 'uint32' },
+          { name: 'gamesWon', type: 'uint32' },
+          { name: 'highCardPlayed', type: 'uint32' },
+          { name: 'pairPlayed', type: 'uint32' },
+          { name: 'twoPairPlayed', type: 'uint32' },
+          { name: 'threeOfAKindPlayed', type: 'uint32' },
+          { name: 'fourOfAKindPlayed', type: 'uint32' },
+          { name: 'fiveOfAKindPlayed', type: 'uint32' },
+          { name: 'fullHousePlayed', type: 'uint32' },
+          { name: 'flushPlayed', type: 'uint32' },
+          { name: 'straightPlayed', type: 'uint32' },
+          { name: 'straightFlushPlayed', type: 'uint32' },
+          { name: 'royalFlushPlayed', type: 'uint32' },
+          { name: 'lootBoxesPurchased', type: 'uint32' },
+          { name: 'cardsPurchased', type: 'uint32' },
+          { name: 'specialsPurchased', type: 'uint32' },
+          { name: 'specialsSold', type: 'uint32' },
+          { name: 'powerUpsPurchased', type: 'uint32' },
+          { name: 'levelUpsPurchased', type: 'uint32' },
+          { name: 'modifiersPurchased', type: 'uint32' },
+          { name: 'rerollsPurchased', type: 'uint32' },
+          { name: 'burnPurchased', type: 'uint32' },
+        ],
+      },
+    ],
+    outputs: [],
+  },
+  {
+    type: 'function',
     name: 'syncProgression',
     stateMutability: 'nonpayable',
     inputs: [
@@ -128,6 +165,32 @@ type ParsedProgression = {
   totalRuns: number;
   maxLevel: number;
   maxRound: number;
+};
+
+type ParsedPlayerStats = {
+  player: `0x${string}`;
+  gamesPlayed: number;
+  gamesWon: number;
+  highCardPlayed: number;
+  pairPlayed: number;
+  twoPairPlayed: number;
+  threeOfAKindPlayed: number;
+  fourOfAKindPlayed: number;
+  fiveOfAKindPlayed: number;
+  fullHousePlayed: number;
+  flushPlayed: number;
+  straightPlayed: number;
+  straightFlushPlayed: number;
+  royalFlushPlayed: number;
+  lootBoxesPurchased: number;
+  cardsPurchased: number;
+  specialsPurchased: number;
+  specialsSold: number;
+  powerUpsPurchased: number;
+  levelUpsPurchased: number;
+  modifiersPurchased: number;
+  rerollsPurchased: number;
+  burnPurchased: number;
 };
 
 function getMissingCeloConfig(): string[] {
@@ -294,6 +357,38 @@ function parseProgressionCalldata(calldata: unknown[]): ParsedProgression {
   };
 }
 
+function parsePlayerStatsCalldata(calldata: unknown[]): ParsedPlayerStats {
+  if (calldata.length !== 23) {
+    throw new Error(`Invalid addPlayerStats calldata length: expected 23, received ${calldata.length}`);
+  }
+
+  return {
+    player: toAddress(calldata[0], 'playerStats.player'),
+    gamesPlayed: toUint32(calldata[1], 'playerStats.gamesPlayed'),
+    gamesWon: toUint32(calldata[2], 'playerStats.gamesWon'),
+    highCardPlayed: toUint32(calldata[3], 'playerStats.highCardPlayed'),
+    pairPlayed: toUint32(calldata[4], 'playerStats.pairPlayed'),
+    twoPairPlayed: toUint32(calldata[5], 'playerStats.twoPairPlayed'),
+    threeOfAKindPlayed: toUint32(calldata[6], 'playerStats.threeOfAKindPlayed'),
+    fourOfAKindPlayed: toUint32(calldata[7], 'playerStats.fourOfAKindPlayed'),
+    fiveOfAKindPlayed: toUint32(calldata[8], 'playerStats.fiveOfAKindPlayed'),
+    fullHousePlayed: toUint32(calldata[9], 'playerStats.fullHousePlayed'),
+    flushPlayed: toUint32(calldata[10], 'playerStats.flushPlayed'),
+    straightPlayed: toUint32(calldata[11], 'playerStats.straightPlayed'),
+    straightFlushPlayed: toUint32(calldata[12], 'playerStats.straightFlushPlayed'),
+    royalFlushPlayed: toUint32(calldata[13], 'playerStats.royalFlushPlayed'),
+    lootBoxesPurchased: toUint32(calldata[14], 'playerStats.lootBoxesPurchased'),
+    cardsPurchased: toUint32(calldata[15], 'playerStats.cardsPurchased'),
+    specialsPurchased: toUint32(calldata[16], 'playerStats.specialsPurchased'),
+    specialsSold: toUint32(calldata[17], 'playerStats.specialsSold'),
+    powerUpsPurchased: toUint32(calldata[18], 'playerStats.powerUpsPurchased'),
+    levelUpsPurchased: toUint32(calldata[19], 'playerStats.levelUpsPurchased'),
+    modifiersPurchased: toUint32(calldata[20], 'playerStats.modifiersPurchased'),
+    rerollsPurchased: toUint32(calldata[21], 'playerStats.rerollsPurchased'),
+    burnPurchased: toUint32(calldata[22], 'playerStats.burnPurchased'),
+  };
+}
+
 export async function executeCeloQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     const missing = getMissingCeloConfig();
@@ -352,6 +447,15 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
             progression.maxLevel,
             progression.maxRound,
           ],
+        });
+        break;
+      }
+      case 'addPlayerStats': {
+        const playerStats = parsePlayerStatsCalldata(transaction.calldata);
+        data = encodeFunctionData({
+          abi: celoProfileAbi,
+          functionName: 'addPlayerStats',
+          args: [playerStats],
         });
         break;
       }

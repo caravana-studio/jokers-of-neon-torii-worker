@@ -142,6 +142,20 @@ async function buildCeloGameSnapshotTransactions(gameId: number): Promise<Enqueu
   ];
 }
 
+async function resolveCeloPlayerWallet(
+  burnerAddress: string,
+  context: string
+): Promise<string | null> {
+  const playerWallet = await resolveCeloWalletFromBurnerAddress(burnerAddress);
+
+  if (!playerWallet) {
+    console.warn(`⚠️  Could not resolve an EVM wallet for Celo burner ${burnerAddress}; skipping ${context}`);
+    return null;
+  }
+
+  return playerWallet;
+}
+
 const starknetEventHandler: BlockchainEventHandler = {
   blockchain: 'starknet',
 
@@ -284,8 +298,26 @@ const celoEventHandler: BlockchainEventHandler = {
     return warnNoop('celo', 'MissionCompletedEvent');
   },
 
-  async buildCreateGameTransactions() {
-    return warnNoop('celo', 'CreateGameEvent');
+  async buildCreateGameTransactions(event) {
+    if (!hasCeloWriteConfig()) {
+      return [];
+    }
+
+    const playerWallet = await resolveCeloPlayerWallet(event.player, `create game stats sync for game ${event.gameId}`);
+    if (!playerWallet) {
+      return [];
+    }
+
+    return [{
+      blockchain: 'celo',
+      operation: 'stats.game_created',
+      targetRef: 'profile_system',
+      payload: { player: playerWallet },
+      metadata: {
+        sourceEvent: 'CreateGameEvent',
+        gameId: event.gameId,
+      },
+    }];
   },
 
   async buildPlayWinGameTransactions(event) {
@@ -293,11 +325,59 @@ const celoEventHandler: BlockchainEventHandler = {
   },
 
   async buildPlayGameOverTransactions(event) {
-    return buildCeloGameSnapshotTransactions(event.gameId);
+    if (!hasCeloWriteConfig()) {
+      return [];
+    }
+
+    const snapshotTransactions = await buildCeloGameSnapshotTransactions(event.gameId);
+    const playerWallet = await resolveCeloPlayerWallet(event.player, `player stats sync for game ${event.gameId}`);
+
+    if (!playerWallet) {
+      return snapshotTransactions;
+    }
+
+    const playerStats = await getPlayerStats(event.gameId);
+
+    return [
+      ...snapshotTransactions,
+      {
+        blockchain: 'celo',
+        operation: 'stats.player',
+        targetRef: 'profile_system',
+        payload: {
+          player: playerWallet,
+          playerStats,
+        },
+        metadata: {
+          sourceEvent: 'PlayGameOverEvent',
+          gameId: event.gameId,
+        },
+      },
+    ];
   },
 
-  async buildLevelPassedTransactions() {
-    return warnNoop('celo', 'LevelPassedEvent');
+  async buildLevelPassedTransactions(event) {
+    if (!hasCeloWriteConfig() || event.newLevel !== 4) {
+      return [];
+    }
+
+    const playerWallet = await resolveCeloPlayerWallet(event.player, `game won stats sync for game ${event.gameId}`);
+    if (!playerWallet) {
+      return [];
+    }
+
+    return [{
+      blockchain: 'celo',
+      operation: 'stats.game_won',
+      targetRef: 'profile_system',
+      payload: { player: playerWallet },
+      metadata: {
+        sourceEvent: 'LevelPassedEvent',
+        gameId: event.gameId,
+        previousLevel: event.previousLevel,
+        newLevel: event.newLevel,
+      },
+    }];
   },
 
   async buildProgressionUpdatedTransactions(event) {
@@ -305,9 +385,8 @@ const celoEventHandler: BlockchainEventHandler = {
       return [];
     }
 
-    const playerWallet = await resolveCeloWalletFromBurnerAddress(event.player);
+    const playerWallet = await resolveCeloPlayerWallet(event.player, 'progression sync');
     if (!playerWallet) {
-      console.warn(`⚠️  Could not resolve an EVM wallet for Celo burner ${event.player}; skipping progression sync`);
       return [];
     }
 

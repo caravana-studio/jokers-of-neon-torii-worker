@@ -4,9 +4,10 @@ import type { QueuedIntent, QueuedTransaction, TransactionResult } from '../tran
 import { executeCeloQueueTransaction } from '../transactionExecutors/celoTransactionExecutor.js';
 import {
   buildGameDataCalldata,
+  buildPlayerStatsCalldata,
   buildRoundDataCalldata,
 } from '../starknetExecutor.js';
-import type { Game, Round } from '../schema.js';
+import type { Game, PlayerStats, Round } from '../schema.js';
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -48,6 +49,38 @@ function getCeloProfileContractAddress(): string {
   }
 
   return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
+}
+
+function buildCreateGameStats(player: string): string[] {
+  return [
+    player,
+    '1',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+    '0',
+  ];
+}
+
+function buildGameWonStats(player: string): string[] {
+  return [player, '0', '1', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0'];
 }
 
 function toLegacyTransaction(
@@ -94,6 +127,22 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       ]);
     }
 
+    case 'stats.game_created': {
+      const player = asString(payload.player, 'payload.player');
+      return toLegacyTransaction(intent, 'addPlayerStats', buildCreateGameStats(player));
+    }
+
+    case 'stats.game_won': {
+      const player = asString(payload.player, 'payload.player');
+      return toLegacyTransaction(intent, 'addPlayerStats', buildGameWonStats(player));
+    }
+
+    case 'stats.player': {
+      const player = asString(payload.player, 'payload.player');
+      const playerStats = asRecord(payload.playerStats, 'payload.playerStats') as unknown as PlayerStats;
+      return toLegacyTransaction(intent, 'addPlayerStats', buildPlayerStatsCalldata(player, playerStats));
+    }
+
     default:
       throw new Error(`Unsupported Celo operation: ${intent.operation}`);
   }
@@ -103,7 +152,7 @@ export const celoAdapter: BlockchainAdapter = {
   blockchain: 'celo',
 
   canExecute(intent) {
-    return ['game.snapshot', 'round.snapshot', 'progression.sync'].includes(intent.operation);
+    return ['game.snapshot', 'round.snapshot', 'progression.sync', 'stats.game_created', 'stats.game_won', 'stats.player'].includes(intent.operation);
   },
 
   async execute(intent: QueuedIntent): Promise<TransactionResult> {
