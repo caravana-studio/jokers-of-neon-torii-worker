@@ -173,7 +173,7 @@ const starknetEventHandler: BlockchainEventHandler = {
     }
 
     const metadata = {
-      sourceEvent: 'MissionCompletedEvent',
+      sourceEvent: 'MissionCompletedV2Event',
       periodType: event.periodType,
       periodTypeId: event.periodTypeId,
       periodId: event.periodId,
@@ -336,7 +336,7 @@ const celoEventHandler: BlockchainEventHandler = {
   blockchain: 'celo',
 
   async buildMissionCompletedTransactions() {
-    return warnNoop('celo', 'MissionCompletedEvent');
+    return warnNoop('celo', 'MissionCompletedV2Event');
   },
 
   async buildCreateGameTransactions(event) {

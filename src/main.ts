@@ -452,13 +452,15 @@ async function createWorker() {
           if (models && models.jokers_of_neon_core) {
             const coreModels = models.jokers_of_neon_core;
 
-            // Check if MissionCompletedEvent exists
-            if (coreModels.MissionCompletedEvent) {
-              const missionEvent = normalizeMissionCompletedEvent(coreModels.MissionCompletedEvent);
+            // Check if MissionCompletedV2Event exists
+            if (coreModels.MissionCompletedV2Event || coreModels.MissionCompletedEvent) {
+              const missionEvent = normalizeMissionCompletedEvent(
+                coreModels.MissionCompletedV2Event ?? coreModels.MissionCompletedEvent
+              );
 
               if (missionEvent) {
                 if (shouldProcessBlockchain('starknet')) {
-                  console.log('\n🎯 MissionCompletedEvent found!');
+                  console.log('\n🎯 MissionCompletedV2Event found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Player:        ${missionEvent.player}`);
                   console.log(`   Period:        ${missionEvent.periodType} (${missionEvent.periodId})`);
@@ -473,7 +475,7 @@ async function createWorker() {
                   await handleMissionCompleted(missionEvent);
                 }
               } else {
-                console.log('⚠️  Incomplete MissionCompletedEvent - will not be processed');
+                console.log('⚠️  Incomplete MissionCompletedV2Event - will not be processed');
               }
             }
 
@@ -663,6 +665,7 @@ async function createWorker() {
   const query = new HistoricalToriiQueryBuilder()
     .withEntityModels([
       'jokers_of_neon_core-MissionCompletedEvent',
+      'jokers_of_neon_core-MissionCompletedV2Event',
       'jokers_of_neon_core-CreateGameEvent',
       'jokers_of_neon_core-CurrentHandEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
@@ -684,7 +687,9 @@ async function createWorker() {
       console.log('📜 Historical events found:');
       items.forEach((event: any, index: number) => {
         const missionEvent = normalizeMissionCompletedEvent(
-          event?.models?.jokers_of_neon_core?.MissionCompletedEvent ?? event
+          event?.models?.jokers_of_neon_core?.MissionCompletedV2Event ??
+            event?.models?.jokers_of_neon_core?.MissionCompletedEvent ??
+            event
         );
         if (missionEvent) {
           console.log(
@@ -710,7 +715,7 @@ async function createWorker() {
 
   console.log('✅ Listener configured successfully\n');
   console.log('👂 Listening for events:');
-  console.log('   - MissionCompletedEvent');
+  console.log('   - MissionCompletedV2Event');
   console.log('   - CreateGameEvent');
   console.log('   - CurrentHandEvent');
   console.log('   - PlayWinGameEvent');
