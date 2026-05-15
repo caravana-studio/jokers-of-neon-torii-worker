@@ -138,6 +138,8 @@ const celoChain = defineChain({
   testnet: celoEvmConfig.testnet,
 });
 
+let validatedCeloRpcUrl: string | null = null;
+
 type ParsedGameData = {
   id: number;
   owner: `0x${string}`;
@@ -210,6 +212,23 @@ function getCeloAccount() {
   }
 
   return account;
+}
+
+async function assertCeloRpcMatchesConfiguredChain(
+  publicClient: ReturnType<typeof createPublicClient>
+): Promise<void> {
+  if (validatedCeloRpcUrl === env.CELO_RPC_URL) {
+    return;
+  }
+
+  const actualChainId = await publicClient.getChainId();
+  if (actualChainId !== celoEvmConfig.chainId) {
+    throw new Error(
+      `CELO_RPC_URL is connected to chain ${actualChainId}, but this worker expects ${celoEvmConfig.name} (${celoEvmConfig.chainId})`
+    );
+  }
+
+  validatedCeloRpcUrl = env.CELO_RPC_URL;
 }
 
 function toAddress(value: unknown, label: string): `0x${string}` {
@@ -412,6 +431,8 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
       chain: celoChain,
       transport: http(env.CELO_RPC_URL),
     });
+
+    await assertCeloRpcMatchesConfiguredChain(publicClient);
 
     const contractAddress = toAddress(transaction.contractAddress, 'transaction.contractAddress');
     let data: `0x${string}`;
