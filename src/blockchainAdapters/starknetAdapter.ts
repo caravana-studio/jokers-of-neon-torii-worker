@@ -155,6 +155,24 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'xp.mission_completed': {
+      const xp = String(asNumber(payload.xp, 'payload.xp'));
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS'),
+        // TODO(season4): replace with a period-aware profile entrypoint when profile exposes one.
+        'test_xp',
+        [
+          asString(payload.player, 'payload.player'),
+          '1',
+          xp,
+          '0',
+          xp,
+          '0',
+        ]
+      );
+    }
+
     case 'xp.level_completion': {
       return toLegacyTransaction(
         intent,
