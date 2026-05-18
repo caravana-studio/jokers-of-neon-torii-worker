@@ -6,6 +6,8 @@ export type TransactionOperation =
   | 'progression.sync'
   | 'xp.daily_mission'
   | 'xp.level_completion'
+  | 'xp.multiplier_set'
+  | 'xp.test'
   | 'stats.game_created'
   | 'stats.game_won'
   | 'stats.player'
@@ -17,6 +19,8 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'progression.sync',
   'xp.daily_mission',
   'xp.level_completion',
+  'xp.multiplier_set',
+  'xp.test',
   'stats.game_created',
   'stats.game_won',
   'stats.player',
