@@ -1,3 +1,4 @@
+import { shortString } from 'starknet';
 import { env } from '../env.js';
 import type { BlockchainAdapter } from './types.js';
 import type { QueuedIntent, QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
@@ -23,6 +24,20 @@ function asString(value: unknown, label: string): string {
   }
 
   return value;
+}
+
+function asShortStringFelt(value: unknown, label: string): string {
+  const text = asString(value, label);
+
+  if (!text) {
+    return '0';
+  }
+
+  if (text.startsWith('0x') || /^\d+$/.test(text)) {
+    return text;
+  }
+
+  return shortString.encodeShortString(text);
 }
 
 function asNumber(value: unknown, label: string): number {
@@ -160,15 +175,15 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       return toLegacyTransaction(
         intent,
         getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS'),
-        // TODO(season4): replace with a period-aware profile entrypoint when profile exposes one.
-        'test_xp',
+        'add_mission_xp',
         [
           asString(payload.player, 'payload.player'),
-          '1',
+          String(asNumber(payload.periodTypeId, 'payload.periodTypeId')),
+          String(asNumber(payload.periodId, 'payload.periodId')),
+          asShortStringFelt(payload.missionId, 'payload.missionId'),
+          asShortStringFelt(payload.templateId, 'payload.templateId'),
+          String(asNumber(payload.difficulty, 'payload.difficulty')),
           xp,
-          '0',
-          xp,
-          '0',
         ]
       );
     }
