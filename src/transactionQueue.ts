@@ -2,6 +2,10 @@ import { supabase } from './config/supabase.js';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { executeIntent, isRegisteredBlockchain } from './blockchainAdapters/index.js';
 import {
+  markDailyStreakTransactionCompleted,
+  markDailyStreakTransactionFailed,
+} from './services/streakCacheService.js';
+import {
   isTransactionOperation,
   type EnqueueTransactionParams,
   type QueuedIntent,
@@ -200,6 +204,7 @@ export class TransactionQueue {
         await this.updateTransactionStatus(transaction.id, 'completed', {
           transactionHash: result.transactionHash
         });
+        await markDailyStreakTransactionCompleted(transaction, result);
 
         this.currentTransactionId = null;
 
@@ -219,6 +224,7 @@ export class TransactionQueue {
           await this.updateTransactionStatus(transaction.id, 'failed', {
             errorMessage: result.error?.message
           });
+          await markDailyStreakTransactionFailed(transaction, result.error?.message);
 
           this.currentTransactionId = null;
 

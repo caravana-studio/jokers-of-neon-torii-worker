@@ -5,6 +5,7 @@ import { num, shortString } from 'starknet';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
+import { markDailyStreakPending } from './services/streakCacheService.js';
 import { getCronScheduler } from './cron/cronScheduler.js';
 import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
 import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
@@ -225,6 +226,8 @@ async function handleMissionCompleted(event: MissionCompletedEventData) {
   console.log(`   Game ID:     ${event.gameId}`);
 
   try {
+    await markDailyStreakPending(event);
+
     if (event.periodType === 'daily' && event.gameId > 0) {
       const sourceBlockchain = await resolveGameBlockchain(event.gameId, {
         logTarget: false,
