@@ -200,6 +200,20 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'streak.grant_protectors': {
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS'),
+        'grant_streak_protectors',
+        [
+          asString(payload.player, 'payload.player'),
+          String(asNumber(payload.quantity, 'payload.quantity')),
+          asShortStringFelt(payload.source, 'payload.source'),
+          asShortStringFelt(payload.sourceId, 'payload.sourceId'),
+        ]
+      );
+    }
+
     case 'stats.game_created': {
       const player = asString(payload.player, 'payload.player');
       return toLegacyTransaction(

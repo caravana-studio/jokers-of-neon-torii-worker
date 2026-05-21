@@ -225,6 +225,15 @@ async function handleMissionCompleted(event: MissionCompletedEventData) {
   console.log(`   Game ID:     ${event.gameId}`);
 
   try {
+    if (event.periodType === 'daily' && event.gameId > 0) {
+      const sourceBlockchain = await resolveGameBlockchain(event.gameId, {
+        logTarget: false,
+        logFetch: false,
+      });
+      console.log(`   Source chain: ${sourceBlockchain}`);
+      console.log('   XP profile target: starknet');
+    }
+
     const transactions = await buildTransactionsForGameBlockchain('starknet', selectedBlockchain =>
       getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions(event)
     );
