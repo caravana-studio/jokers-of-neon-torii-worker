@@ -65,12 +65,13 @@ function calculateEffectiveStreak(input: {
   protectorsAvailable: number;
 }) {
   const currentDay = getCurrentDailyPeriodId();
+  const hasStarted = input.currentStreak > 0 && input.lastCompletedDay > 0;
   const daysMissed =
-    input.currentStreak > 0 && currentDay > input.lastCompletedDay
+    hasStarted && currentDay > input.lastCompletedDay
       ? Math.max(0, currentDay - input.lastCompletedDay - 1)
       : 0;
-  const isProtected = input.currentStreak > 0 && daysMissed > 0 && daysMissed <= input.protectorsAvailable;
-  const isBroken = input.currentStreak > 0 && daysMissed > input.protectorsAvailable;
+  const isProtected = hasStarted && daysMissed > 0 && daysMissed <= input.protectorsAvailable;
+  const isBroken = hasStarted && daysMissed > input.protectorsAvailable;
   const effectiveStreak = isBroken ? 0 : input.currentStreak;
 
   return {
@@ -109,7 +110,9 @@ async function getStreakRow(playerAddress: string): Promise<PlayerStreakRow | nu
 
   if (error) {
     if (error.code === '42P01') {
-      console.warn('[StreakCache] player_streaks table missing; run migrations/create_player_streaks_tables.sql');
+      console.warn(
+        '[StreakCache] player_streaks table missing; run supabase/migrations/20260526120000_create_player_streaks_tables.sql'
+      );
       return null;
     }
     throw error;
@@ -278,9 +281,29 @@ export async function markDailyStreakTransactionCompleted(
   }
 
   try {
+    const existing = await getStreakRow(payload.playerAddress);
+    const currentStreak = Math.max(1, existing ? toNumber(existing.current_streak) : 1);
+    const longestStreak = Math.max(currentStreak, existing ? toNumber(existing.longest_streak) : 0);
+    const lastCompletedDay = Math.max(payload.periodId, existing ? toNumber(existing.last_completed_day) : 0);
+    const protectorsAvailable = existing ? toNumber(existing.protectors_available) : 0;
+    const effective = calculateEffectiveStreak({
+      currentStreak,
+      lastCompletedDay,
+      protectorsAvailable,
+    });
+
     const { data, error } = await supabase
       .from('player_streaks')
       .update({
+        current_streak: currentStreak,
+        effective_streak: effective.effectiveStreak,
+        longest_streak: longestStreak,
+        last_completed_day: lastCompletedDay,
+        protectors_available: protectorsAvailable,
+        protectors_needed: effective.protectorsNeeded,
+        days_missed: effective.daysMissed,
+        is_protected: effective.isProtected,
+        is_broken: effective.isBroken,
         sync_status: 'confirmed',
         pending_period_id: null,
         pending_mission_id: null,
@@ -300,14 +323,44 @@ export async function markDailyStreakTransactionCompleted(
       throw error;
     }
 
+    if (!data) {
+      const username = existing?.username ?? (await getUsername(payload.playerAddress));
+      const { error: upsertError } = await supabase.from('player_streaks').upsert(
+        {
+          player_address: payload.playerAddress,
+          username,
+          current_streak: currentStreak,
+          effective_streak: effective.effectiveStreak,
+          longest_streak: longestStreak,
+          last_completed_day: lastCompletedDay,
+          protectors_available: protectorsAvailable,
+          protectors_needed: effective.protectorsNeeded,
+          days_missed: effective.daysMissed,
+          is_protected: effective.isProtected,
+          is_broken: effective.isBroken,
+          sync_status: 'confirmed',
+          pending_period_id: null,
+          pending_mission_id: null,
+          pending_template_id: null,
+          last_tx_hash: result.transactionHash ?? null,
+          last_synced_at: new Date().toISOString(),
+        },
+        { onConflict: 'player_address' }
+      );
+
+      if (upsertError && upsertError.code !== '42P01') {
+        throw upsertError;
+      }
+    }
+
     await insertStreakEvent({
       playerAddress: payload.playerAddress,
       eventType: 'daily_mission_confirmed',
       periodId: payload.periodId,
       missionId: payload.missionId,
       templateId: payload.templateId,
-      currentStreak: toNumber((data as PlayerStreakRow | null)?.current_streak),
-      protectorsAvailable: toNumber((data as PlayerStreakRow | null)?.protectors_available),
+      currentStreak,
+      protectorsAvailable,
       txHash: result.transactionHash,
     });
   } catch (error) {
