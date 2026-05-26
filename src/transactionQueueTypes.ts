@@ -8,6 +8,8 @@ export type TransactionOperation =
   | 'xp.daily_mission'
   | 'xp.level_completion'
   | 'streak.grant_protectors'
+  | 'xp.multiplier_set'
+  | 'xp.test'
   | 'stats.game_created'
   | 'stats.game_won'
   | 'stats.player'
@@ -21,6 +23,8 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'xp.daily_mission',
   'xp.level_completion',
   'streak.grant_protectors',
+  'xp.multiplier_set',
+  'xp.test',
   'stats.game_created',
   'stats.game_won',
   'stats.player',

@@ -214,6 +214,43 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'xp.multiplier_set': {
+      const contractAddress = payload.contractAddress;
+      const targetContract =
+        typeof contractAddress === 'string' && contractAddress
+          ? contractAddress
+          : getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS');
+
+      return toLegacyTransaction(
+        intent,
+        targetContract,
+        'set_xp_multiplier',
+        [String(asNumber(payload.multiplier, 'payload.multiplier'))]
+      );
+    }
+
+    case 'xp.test': {
+      const contractAddress = payload.contractAddress;
+      const targetContract =
+        typeof contractAddress === 'string' && contractAddress
+          ? contractAddress
+          : getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS');
+
+      return toLegacyTransaction(
+        intent,
+        targetContract,
+        'test_xp',
+        [
+          asString(payload.address, 'payload.address'),
+          String(asNumber(payload.seasonId, 'payload.seasonId')),
+          asString(payload.seasonXpLow, 'payload.seasonXpLow'),
+          asString(payload.seasonXpHigh, 'payload.seasonXpHigh'),
+          asString(payload.profileXpLow, 'payload.profileXpLow'),
+          asString(payload.profileXpHigh, 'payload.profileXpHigh'),
+        ]
+      );
+    }
+
     case 'stats.game_created': {
       const player = asString(payload.player, 'payload.player');
       return toLegacyTransaction(
