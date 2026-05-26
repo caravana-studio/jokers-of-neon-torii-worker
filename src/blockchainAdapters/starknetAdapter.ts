@@ -1,3 +1,4 @@
+import { shortString } from 'starknet';
 import { env } from '../env.js';
 import type { BlockchainAdapter } from './types.js';
 import type { QueuedIntent, QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
@@ -23,6 +24,20 @@ function asString(value: unknown, label: string): string {
   }
 
   return value;
+}
+
+function asShortStringFelt(value: unknown, label: string): string {
+  const text = asString(value, label);
+
+  if (!text) {
+    return '0';
+  }
+
+  if (text.startsWith('0x') || /^\d+$/.test(text)) {
+    return text;
+  }
+
+  return shortString.encodeShortString(text);
 }
 
 function asNumber(value: unknown, label: string): number {
@@ -155,6 +170,24 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'xp.mission_completed': {
+      const xp = String(asNumber(payload.xp, 'payload.xp'));
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS'),
+        'add_mission_xp',
+        [
+          asString(payload.player, 'payload.player'),
+          String(asNumber(payload.periodTypeId, 'payload.periodTypeId')),
+          String(asNumber(payload.periodId, 'payload.periodId')),
+          asShortStringFelt(payload.missionId, 'payload.missionId'),
+          asShortStringFelt(payload.templateId, 'payload.templateId'),
+          String(asNumber(payload.difficulty, 'payload.difficulty')),
+          xp,
+        ]
+      );
+    }
+
     case 'xp.level_completion': {
       return toLegacyTransaction(
         intent,
@@ -163,6 +196,20 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
         [
           asString(payload.player, 'payload.player'),
           String(asNumber(payload.previousLevel, 'payload.previousLevel')),
+        ]
+      );
+    }
+
+    case 'streak.grant_protectors': {
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS'),
+        'grant_streak_protectors',
+        [
+          asString(payload.player, 'payload.player'),
+          String(asNumber(payload.quantity, 'payload.quantity')),
+          asShortStringFelt(payload.source, 'payload.source'),
+          asShortStringFelt(payload.sourceId, 'payload.sourceId'),
         ]
       );
     }

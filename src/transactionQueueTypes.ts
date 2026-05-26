@@ -4,8 +4,10 @@ export type TransactionOperation =
   | 'game.snapshot'
   | 'round.snapshot'
   | 'progression.sync'
+  | 'xp.mission_completed'
   | 'xp.daily_mission'
   | 'xp.level_completion'
+  | 'streak.grant_protectors'
   | 'xp.multiplier_set'
   | 'xp.test'
   | 'stats.game_created'
@@ -17,8 +19,10 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'game.snapshot',
   'round.snapshot',
   'progression.sync',
+  'xp.mission_completed',
   'xp.daily_mission',
   'xp.level_completion',
+  'streak.grant_protectors',
   'xp.multiplier_set',
   'xp.test',
   'stats.game_created',

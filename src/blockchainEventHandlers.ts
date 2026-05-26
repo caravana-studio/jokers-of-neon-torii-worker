@@ -10,8 +10,16 @@ import { resolveCeloWalletFromBurnerAddress } from './services/celoWalletResolve
 
 export interface MissionCompletedEventData {
   player: string;
+  periodType: 'daily' | 'weekly';
+  periodTypeId: number;
+  periodId: number;
   missionId: string;
-  missionType: string;
+  templateId: string;
+  difficulty: number;
+  target: number;
+  progress: number;
+  xp: number;
+  gameId: number;
 }
 
 export interface GameEventData {
@@ -164,18 +172,51 @@ const starknetEventHandler: BlockchainEventHandler = {
       return [];
     }
 
+    const metadata = {
+      sourceEvent: 'MissionCompletedV2Event',
+      periodType: event.periodType,
+      periodTypeId: event.periodTypeId,
+      periodId: event.periodId,
+      missionId: event.missionId,
+      templateId: event.templateId,
+      difficulty: event.difficulty,
+      target: event.target,
+      progress: event.progress,
+      xp: event.xp,
+      gameId: event.gameId,
+    };
+
+    if (event.xp > 0) {
+      return [{
+        blockchain: 'starknet',
+        operation: 'xp.mission_completed',
+        targetRef: 'xp_system',
+        payload: {
+          player: event.player,
+          periodType: event.periodType,
+          periodTypeId: event.periodTypeId,
+          periodId: event.periodId,
+          missionId: event.missionId,
+          templateId: event.templateId,
+          difficulty: event.difficulty,
+          target: event.target,
+          progress: event.progress,
+          xp: event.xp,
+          gameId: event.gameId,
+        },
+        metadata,
+      }];
+    }
+
     return [{
       blockchain: 'starknet',
       operation: 'xp.daily_mission',
       targetRef: 'xp_system',
       payload: {
         player: event.player,
-        missionType: event.missionType,
+        missionType: String(event.difficulty),
       },
-      metadata: {
-        sourceEvent: 'MissionCompletedEvent',
-        missionId: event.missionId,
-      },
+      metadata,
     }];
   },
 
@@ -295,7 +336,7 @@ const celoEventHandler: BlockchainEventHandler = {
   blockchain: 'celo',
 
   async buildMissionCompletedTransactions() {
-    return warnNoop('celo', 'MissionCompletedEvent');
+    return warnNoop('celo', 'MissionCompletedV2Event');
   },
 
   async buildCreateGameTransactions(event) {

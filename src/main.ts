@@ -1,9 +1,11 @@
 import { w3cwebsocket } from 'websocket';
 import { init } from '@dojoengine/sdk/node';
 import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
+import { num, shortString } from 'starknet';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
+import { markDailyStreakPending } from './services/streakCacheService.js';
 import { getCronScheduler } from './cron/cronScheduler.js';
 import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
 import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
@@ -11,6 +13,7 @@ import {
   getAllBlockchainEventHandlers,
   getBlockchainEventHandler,
   type BlockchainEventHandler,
+  type MissionCompletedEventData,
 } from './blockchainEventHandlers.js';
 import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 
@@ -94,26 +97,153 @@ async function buildTransactionsForGameBlockchain(
   return build(blockchain);
 }
 
-/**
- * Handles daily mission completed event
- */
-async function handleDailyMissionCompleted(player: string, missionId: string, missionType: string) {
-  console.log(`\n🔄 Processing completed mission for ${player}...`);
-  console.log(`   Mission ID: ${missionId}`);
-  console.log(`   Mission Type: ${missionType}`);
+const MISSION_PERIOD_DAILY = 1;
+const MISSION_PERIOD_WEEKLY = 2;
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  if (value && typeof value === 'object' && 'toString' in value) {
+    const parsed = Number((value as { toString: () => string }).toString());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+function readField(record: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      return record[key];
+    }
+  }
+
+  return undefined;
+}
+
+function decodeFeltString(value: unknown): string {
+  if (value === undefined || value === null || value === '' || value === 0 || value === '0') {
+    return '';
+  }
+
+  if (typeof value === 'string' && !value.startsWith('0x') && !/^\d+$/.test(value)) {
+    return value;
+  }
 
   try {
+    return shortString.decodeShortString(num.toHexString(value as any));
+  } catch {
+    return String(value);
+  }
+}
+
+function normalizeMissionCompletedEvent(rawEvent: unknown): MissionCompletedEventData | null {
+  if (!rawEvent || typeof rawEvent !== 'object') {
+    return null;
+  }
+
+  const event = rawEvent as Record<string, unknown>;
+  const playerRaw = readField(event, 'player');
+  const player = typeof playerRaw === 'string' ? playerRaw : String(playerRaw ?? '');
+
+  if (!player) {
+    return null;
+  }
+
+  const hasUnifiedShape =
+    readField(event, 'period_type', 'periodType') !== undefined &&
+    readField(event, 'mission_id', 'missionId') !== undefined &&
+    readField(event, 'template_id', 'templateId') !== undefined &&
+    readField(event, 'difficulty') !== undefined;
+
+  if (hasUnifiedShape) {
+    const periodTypeId = toNumber(readField(event, 'period_type', 'periodType')) ?? MISSION_PERIOD_DAILY;
+    const difficulty = toNumber(readField(event, 'difficulty')) ?? 0;
+    const xp = toNumber(readField(event, 'xp')) ?? 0;
+
+    return {
+      player,
+      periodType: periodTypeId === MISSION_PERIOD_WEEKLY ? 'weekly' : 'daily',
+      periodTypeId,
+      periodId: toNumber(readField(event, 'period_id', 'periodId')) ?? 0,
+      missionId: decodeFeltString(readField(event, 'mission_id', 'missionId')),
+      templateId: decodeFeltString(readField(event, 'template_id', 'templateId')),
+      difficulty,
+      target: toNumber(readField(event, 'target')) ?? 0,
+      progress: toNumber(readField(event, 'progress')) ?? 0,
+      xp,
+      gameId: toNumber(readField(event, 'game_id', 'gameId')) ?? 0,
+    };
+  }
+
+  const legacyMissionId = readField(event, 'id');
+  const legacyMissionType = readField(event, 'mission_type', 'missionType');
+
+  if (legacyMissionId === undefined || legacyMissionType === undefined) {
+    return null;
+  }
+
+  const difficulty = toNumber(legacyMissionType) ?? 0;
+  const missionId = decodeFeltString(legacyMissionId);
+
+  return {
+    player,
+    periodType: 'daily',
+    periodTypeId: MISSION_PERIOD_DAILY,
+    periodId: 0,
+    missionId,
+    templateId: missionId,
+    difficulty,
+    target: 0,
+    progress: 0,
+    xp: 0,
+    gameId: 0,
+  };
+}
+
+/**
+ * Handles mission completed event
+ */
+async function handleMissionCompleted(event: MissionCompletedEventData) {
+  console.log(`\n🔄 Processing completed mission for ${event.player}...`);
+  console.log(`   Period:      ${event.periodType} (${event.periodId})`);
+  console.log(`   Mission ID:  ${event.missionId}`);
+  console.log(`   Template ID: ${event.templateId}`);
+  console.log(`   Difficulty:  ${event.difficulty}`);
+  console.log(`   Progress:    ${event.progress}/${event.target}`);
+  console.log(`   XP:          ${event.xp}`);
+  console.log(`   Game ID:     ${event.gameId}`);
+
+  try {
+    await markDailyStreakPending(event);
+
+    if (event.periodType === 'daily' && event.gameId > 0) {
+      const sourceBlockchain = await resolveGameBlockchain(event.gameId, {
+        logTarget: false,
+        logFetch: false,
+      });
+      console.log(`   Source chain: ${sourceBlockchain}`);
+      console.log('   XP profile target: starknet');
+    }
+
     const transactions = await buildTransactionsForGameBlockchain('starknet', selectedBlockchain =>
-      getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions({
-        player,
-        missionId,
-        missionType,
-      })
+      getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions(event)
     );
     await enqueueTransactions(transactions);
-    logTransactionBuildResult('Daily mission completed', transactions);
+    logTransactionBuildResult('Mission completed', transactions);
   } catch (error) {
-    console.error('❌ Error queueing daily mission XP transaction:', error);
+    console.error('❌ Error queueing mission XP transaction:', error);
   }
 }
 
@@ -334,28 +464,30 @@ async function createWorker() {
           if (models && models.jokers_of_neon_core) {
             const coreModels = models.jokers_of_neon_core;
 
-            // Check if MissionCompletedEvent exists
-            if (coreModels.MissionCompletedEvent) {
-              const event = coreModels.MissionCompletedEvent;
+            // Check if MissionCompletedV2Event exists
+            if (coreModels.MissionCompletedV2Event || coreModels.MissionCompletedEvent) {
+              const missionEvent = normalizeMissionCompletedEvent(
+                coreModels.MissionCompletedV2Event ?? coreModels.MissionCompletedEvent
+              );
 
-              if (event.player && event.id !== undefined && event.mission_type !== undefined) {
+              if (missionEvent) {
                 if (shouldProcessBlockchain('starknet')) {
-                  console.log('\n🎯 MissionCompletedEvent found!');
+                  console.log('\n🎯 MissionCompletedV2Event found!');
                   console.log(`   Entity ID:     ${entityId}`);
-                  console.log(`   Player:        ${event.player || 'N/A'}`);
-                  console.log(`   Mission ID:    ${event.id}`);
-                  console.log(`   Mission Type:  ${event.mission_type}`);
+                  console.log(`   Player:        ${missionEvent.player}`);
+                  console.log(`   Period:        ${missionEvent.periodType} (${missionEvent.periodId})`);
+                  console.log(`   Mission ID:    ${missionEvent.missionId}`);
+                  console.log(`   Template ID:   ${missionEvent.templateId}`);
+                  console.log(`   Difficulty:    ${missionEvent.difficulty}`);
+                  console.log(`   XP:            ${missionEvent.xp}`);
+                  console.log(`   Game ID:       ${missionEvent.gameId}`);
                   console.log(`   Timestamp:     ${new Date().toISOString()}`);
                   console.log('─'.repeat(60));
 
-                  await handleDailyMissionCompleted(
-                    event.player,
-                    String(event.id),
-                    String(event.mission_type)
-                  );
+                  await handleMissionCompleted(missionEvent);
                 }
               } else {
-                console.log('⚠️  Incomplete MissionCompletedEvent - will not be processed');
+                console.log('⚠️  Incomplete MissionCompletedV2Event - will not be processed');
               }
             }
 
@@ -545,6 +677,7 @@ async function createWorker() {
   const query = new HistoricalToriiQueryBuilder()
     .withEntityModels([
       'jokers_of_neon_core-MissionCompletedEvent',
+      'jokers_of_neon_core-MissionCompletedV2Event',
       'jokers_of_neon_core-CreateGameEvent',
       'jokers_of_neon_core-CurrentHandEvent',
       'jokers_of_neon_core-PlayWinGameEvent',
@@ -565,7 +698,18 @@ async function createWorker() {
     if (items.length > 0) {
       console.log('📜 Historical events found:');
       items.forEach((event: any, index: number) => {
-        console.log(`   ${index + 1}. Player: ${event.player || 'N/A'}, Mission: ${event.id || 'N/A'}`);
+        const missionEvent = normalizeMissionCompletedEvent(
+          event?.models?.jokers_of_neon_core?.MissionCompletedV2Event ??
+            event?.models?.jokers_of_neon_core?.MissionCompletedEvent ??
+            event
+        );
+        if (missionEvent) {
+          console.log(
+            `   ${index + 1}. Player: ${missionEvent.player}, Period: ${missionEvent.periodType}, Mission: ${missionEvent.templateId || missionEvent.missionId}`
+          );
+        } else {
+          console.log(`   ${index + 1}. Event entity: ${event?.entityId || 'N/A'}`);
+        }
       });
       console.log('');
     }
@@ -583,7 +727,7 @@ async function createWorker() {
 
   console.log('✅ Listener configured successfully\n');
   console.log('👂 Listening for events:');
-  console.log('   - MissionCompletedEvent');
+  console.log('   - MissionCompletedV2Event');
   console.log('   - CreateGameEvent');
   console.log('   - CurrentHandEvent');
   console.log('   - PlayWinGameEvent');
