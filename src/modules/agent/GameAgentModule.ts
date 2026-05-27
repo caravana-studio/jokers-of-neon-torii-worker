@@ -32,6 +32,8 @@ async function runAgentCycle(): Promise<void> {
     try {
       const claimTxHash = await claim(seasonId, account);
       console.log(`[agent] Lives claimed season ${seasonId}: ${claimTxHash}`);
+      await provider.waitForTransaction(claimTxHash);
+      console.log(`[agent] Lives claim confirmed: ${claimTxHash}`);
     } catch (error) {
       console.log(`[agent] Lives claim skipped: ${error instanceof Error ? error.message : error}`);
     }
@@ -57,7 +59,7 @@ async function runAgentCycle(): Promise<void> {
           break;
         }
         if (errorMsg.includes('execution_error') || errorMsg.includes('Transaction execution')) {
-          console.log('[agent] Tx failed, next account');
+          console.log(`[agent] Tx failed, next account: ${errorMsg}`);
           break;
         }
         console.error(`[agent] Error: ${errorMsg}`);
