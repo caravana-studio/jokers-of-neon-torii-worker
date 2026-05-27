@@ -97,6 +97,8 @@ async function buildTransactionsForGameBlockchain(
 
 const MISSION_PERIOD_DAILY = 1;
 const MISSION_PERIOD_WEEKLY = 2;
+const CURRENT_HAND_DEDUPE_WINDOW_MS = 5000;
+const recentCurrentHandEvents = new Map<string, number>();
 
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number') {
@@ -208,6 +210,25 @@ function normalizeMissionCompletedEvent(rawEvent: unknown): MissionCompletedEven
     xp: 0,
     gameId: 0,
   };
+}
+
+function shouldProcessCurrentHandEvent(gameId: number, cards: number[]): boolean {
+  const now = Date.now();
+  const key = `${gameId}:${cards.join(',')}`;
+
+  for (const [eventKey, timestamp] of recentCurrentHandEvents) {
+    if (now - timestamp > CURRENT_HAND_DEDUPE_WINDOW_MS) {
+      recentCurrentHandEvents.delete(eventKey);
+    }
+  }
+
+  const previousTimestamp = recentCurrentHandEvents.get(key);
+  if (previousTimestamp && now - previousTimestamp <= CURRENT_HAND_DEDUPE_WINDOW_MS) {
+    return false;
+  }
+
+  recentCurrentHandEvents.set(key, now);
+  return true;
 }
 
 /**
@@ -507,17 +528,24 @@ export async function startToriiWorker() {
               // Process the event
               if (event.game_id !== undefined && event.cards !== undefined) {
                 const gameId = Number(event.game_id);
+                const cards = Array.isArray(event.cards) ? event.cards.map(Number) : [];
+
+                if (!shouldProcessCurrentHandEvent(gameId, cards)) {
+                  console.log(`↩️  Duplicate CurrentHandEvent skipped: game_id=${gameId}, cards=[${cards.join(', ')}]`);
+                  continue;
+                }
+
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
                 if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🎮 CurrentHandEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Game ID:       ${gameId}`);
-                  console.log(`   Cards:         [${event.cards.join(', ')}]`);
+                  console.log(`   Cards:         [${cards.join(', ')}]`);
                   console.log(`   Timestamp:     ${new Date().toISOString()}`);
                   console.log('─'.repeat(60));
 
-                  await handleCurrentHand(gameId, event.cards);
+                  await handleCurrentHand(gameId, cards);
                 }
               } else {
                 console.log('⚠️  Incomplete CurrentHandEvent - will not be processed');
