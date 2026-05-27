@@ -210,6 +210,11 @@ export class PackDistributionService {
       return false;
     }
 
+    if (!env.TRANSACTION_QUEUE_ENABLED) {
+      console.log('ℹ️  Transaction queue is disabled; pack distribution will not enqueue rewards');
+      return false;
+    }
+
     // Check if required config is available
     if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
       console.log('ℹ️  Profile System not configured (read-only mode)');

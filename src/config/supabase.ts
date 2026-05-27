@@ -1,10 +1,35 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { env } from '../env.js';
 
-if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+let client: SupabaseClient | null = null;
+
+export function isSupabaseConfigured(): boolean {
+  return Boolean(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
+}
+
+export function getSupabase(): SupabaseClient {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase is not configured (SUPABASE_URL, SUPABASE_ANON_KEY)');
+  }
+  if (!client) {
+    client = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
+  }
+  return client;
+}
+
+if (!isSupabaseConfigured()) {
   console.warn('⚠️  Supabase configuration incomplete');
-  console.warn('⚠️  Transaction queue will work in memory-only mode');
+  if (env.TRANSACTION_QUEUE_ENABLED) {
+    console.warn('⚠️  Transaction queue will work in memory-only mode');
+  }
   console.log('Required variables: SUPABASE_URL, SUPABASE_ANON_KEY');
 }
 
-export const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
+/** @deprecated Prefer getSupabase() — lazy; only valid when configured */
+export const supabase: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_target, prop) {
+    const resolved = getSupabase();
+    const value = resolved[prop as keyof SupabaseClient];
+    return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(resolved) : value;
+  },
+});

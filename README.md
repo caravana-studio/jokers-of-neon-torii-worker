@@ -1,3 +1,15 @@
+# Jokers of Neon — Unified Worker
+
+Single long-running process: **Torii event listener**, **transaction intent queue**, **scheduled crons** (daily/weekly mission generation, push notifications, pack distribution), and optional **game agent** burners.
+
+Replaces separate deploys of `jokers-of-neon-torii-worker`, `jokers-of-neon-cron`, and `jokers-of-neon-agent`.
+
+**Entry:** `src/index.ts` → `bun run dev` / `bun run build && bun run start`
+
+**Test before prod:** [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md)
+
+---
+
 # Jokers of Neon - Event Listener
 
 Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
@@ -163,3 +175,12 @@ Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el se
 - [Dojo.js Documentation](https://book.dojoengine.org/toolchain/dojo-js)
 - [Example Node Worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker)
 - [Torii Documentation](https://book.dojoengine.org/toolchain/torii)
+
+
+## Unified worker (cron + agent + torii)
+
+Entry point: `src/index.ts` — one process for Torii, queue, crons, notifications, and agent.
+
+See `.env.example` for module flags. Mission generation enqueues `missions.generate_daily` and `missions.generate_weekly` (weekly was missing from the old cron repo).
+
+Test on staging (`MANIFEST_SLOT_ENV` for test slot) before prod cutover.

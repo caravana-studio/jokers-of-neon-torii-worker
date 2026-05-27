@@ -111,11 +111,13 @@ const celoProfileAbi = [
 ] as const;
 
 const celoConfig = getChainConfig('celo');
-const celoEvmConfig = celoConfig.evm;
+const maybeCeloEvmConfig = celoConfig.evm;
 
-if (!celoEvmConfig) {
+if (!maybeCeloEvmConfig) {
   throw new Error('Celo EVM chain configuration is missing');
 }
+
+const celoEvmConfig = maybeCeloEvmConfig;
 
 const celoChain = defineChain({
   id: celoEvmConfig.chainId,

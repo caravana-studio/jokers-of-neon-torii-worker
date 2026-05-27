@@ -17,8 +17,8 @@ export const env = {
   // Starknet Configuration (Optional - for executing transactions)
   STARKNET_RPC_URL: process.env.STARKNET_RPC_URL || '',
   STARKNET_RPC_API_KEY: process.env.STARKNET_RPC_API_KEY || '',
-  STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || '',
-  STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || '',
+  STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY || '',
+  STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || process.env.ADDRESS || '',
 
   // Celo / EVM Configuration (Optional - used for EVM execution)
   CELO_RPC_URL: process.env.CELO_RPC_URL || '',
@@ -46,7 +46,7 @@ export const env = {
   // Event Listener Mode
   // Si STARKNET_PRIVATE_KEY está configurado, ejecutará transacciones
   // Si no, solo escuchará eventos (modo solo lectura)
-  READONLY_MODE: !process.env.STARKNET_PRIVATE_KEY,
+  READONLY_MODE: !(process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY),
 
   // Pack Distribution Configuration
   PACK_DISTRIBUTION_ENABLED: process.env.PACK_DISTRIBUTION_ENABLED === 'true',
@@ -55,6 +55,40 @@ export const env = {
   GAME_STATS_API_KEY: process.env.GAME_STATS_API_KEY || '',
   DAILY_CRON_SCHEDULE: process.env.DAILY_CRON_SCHEDULE || '5 6 * * *',   // 06:05 UTC daily (after 6am UTC day boundary)
   WEEKLY_CRON_SCHEDULE: process.env.WEEKLY_CRON_SCHEDULE || '10 6 * * 1', // 06:10 UTC every Monday
+  // Worker module toggles
+  TORII_LISTENER_ENABLED: process.env.TORII_LISTENER_ENABLED !== 'false',
+  TRANSACTION_QUEUE_ENABLED: process.env.TRANSACTION_QUEUE_ENABLED !== 'false',
+  CRON_JOBS_ENABLED: process.env.CRON_JOBS_ENABLED !== 'false',
+  NOTIFICATIONS_ENABLED: process.env.NOTIFICATIONS_ENABLED === 'true',
+  MISSIONS_GENERATION_ENABLED: process.env.MISSIONS_GENERATION_ENABLED !== 'false',
+  GAME_AGENT_ENABLED: process.env.GAME_AGENT_ENABLED === 'true',
+
+  GENERATE_DAILY_MISSIONS_ENABLED: process.env.GENERATE_DAILY_MISSIONS_ENABLED !== 'false',
+  GENERATE_WEEKLY_MISSIONS_ENABLED: process.env.GENERATE_WEEKLY_MISSIONS_ENABLED !== 'false',
+
+  // Cron schedules (missions + notifications)
+  DAILY_MISSION_CRON_SCHEDULE: process.env.DAILY_MISSION_CRON_SCHEDULE || '5 6 * * *',
+  WEEKLY_MISSION_CRON_SCHEDULE: process.env.WEEKLY_MISSION_CRON_SCHEDULE || '10 6 * * 1',
+  NOTIFICATIONS_CRON_SCHEDULE: process.env.NOTIFICATIONS_CRON_SCHEDULE || '0 * * * *',
+  FREE_PACKS_CRON_SCHEDULE: process.env.FREE_PACKS_CRON_SCHEDULE || '*/15 * * * *',
+  CUSTOM_NOTIFICATIONS_CRON_SCHEDULE: process.env.CUSTOM_NOTIFICATIONS_CRON_SCHEDULE || '0 * * * *',
+  DAILY_MISSIONS_NOTIFICATION_HOUR: parseInt(process.env.DAILY_MISSIONS_NOTIFICATION_HOUR || '20', 10),
+  NOTIFICATIONS_MIN_HOUR: parseInt(process.env.NOTIFICATIONS_MIN_HOUR || '9', 10),
+  NOTIFICATIONS_MAX_HOUR: parseInt(process.env.NOTIFICATIONS_MAX_HOUR || '21', 10),
+  NOTIFICATIONS_DEBUG_WALLET: process.env.NOTIFICATIONS_DEBUG_WALLET || '',
+
+  // Data API (notifications + legacy alias)
+  DATA_API_URL: process.env.DATA_API_URL || process.env.FULL_GAME_API_URL?.replace(/\/api\/full-game$/, '') || 'https://jokers-of-neon-data.vercel.app',
+
+  // Firebase (lazy init when NOTIFICATIONS_ENABLED)
+  FIREBASE_CREDENTIALS_JSON: process.env.FIREBASE_CREDENTIALS_JSON || '',
+  FIREBASE_CREDENTIALS_PATH: process.env.FIREBASE_CREDENTIALS_PATH || '',
+
+  // Game agent
+  BURNER_ACCOUNTS: process.env.BURNER_ACCOUNTS || '',
+  INTERVAL_HOURS: parseInt(process.env.INTERVAL_HOURS || '13', 10),
+  PLAYBACK_API_URL: process.env.PLAYBACK_API_URL || '',
+
 };
 
 // Validar configuración requerida
@@ -106,4 +140,12 @@ export function getWorkerBlockchainFilter(): BlockchainId[] | null {
   const parsed = values.filter(isConfiguredBlockchain);
 
   return Array.from(new Set(parsed));
+}
+
+
+export function resolveDataApiBaseUrl(): string {
+  if (env.DATA_API_URL) {
+    return env.DATA_API_URL.replace(/\/$/, '');
+  }
+  return 'https://jokers-of-neon-data.vercel.app';
 }

@@ -1,5 +1,6 @@
 import { shortString } from 'starknet';
 import { env } from '../env.js';
+import { getSlotDailyMissionsSystemAddress } from '../config/manifest.js';
 import type { BlockchainAdapter } from './types.js';
 import type { QueuedIntent, QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import { executeStarknetQueueTransaction } from '../transactionExecutors/starknetTransactionExecutor.js';
@@ -291,6 +292,24 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
           asString(payload.player, 'payload.player'),
           String(asNumber(payload.packId, 'payload.packId')),
         ]
+      );
+    }
+
+    case 'missions.generate_daily': {
+      return toLegacyTransaction(
+        intent,
+        getSlotDailyMissionsSystemAddress(),
+        'generate_daily_missions',
+        []
+      );
+    }
+
+    case 'missions.generate_weekly': {
+      return toLegacyTransaction(
+        intent,
+        getSlotDailyMissionsSystemAddress(),
+        'generate_weekly_missions',
+        []
       );
     }
 

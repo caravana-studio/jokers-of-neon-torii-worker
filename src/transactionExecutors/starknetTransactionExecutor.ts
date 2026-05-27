@@ -1,6 +1,7 @@
 import { Account, Call, RpcProvider } from 'starknet';
 import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
+import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
 
 let starknetRpcHealthCheckPromise: Promise<void> | null = null;
 
@@ -98,22 +99,25 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
     console.log(`   Calldata:   ${JSON.stringify(call.calldata)}`);
 
     const account = getStarknetAccount();
-    const starknetNonce = await account.getNonce();
-    const { transaction_hash } = await account.execute(call, {
-      nonce: starknetNonce,
-      skipValidate: true,
+    const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
+      const starknetNonce = await account.getNonce();
+      const { transaction_hash } = await account.execute(call, {
+        nonce: starknetNonce,
+        skipValidate: true,
+      });
+      return transaction_hash;
     });
 
-    console.log(`✅ Transaction sent: ${transaction_hash}`);
+    console.log(`✅ Transaction sent: ${transactionHash}`);
     console.log('⏳ Waiting for confirmation...');
 
-    await account.waitForTransaction(transaction_hash);
+    await account.waitForTransaction(transactionHash);
 
-    console.log(`✅ Transaction confirmed: ${transaction_hash}\n`);
+    console.log(`✅ Transaction confirmed: ${transactionHash}\n`);
 
     return {
       success: true,
-      transactionHash: transaction_hash,
+      transactionHash,
     };
   } catch (error) {
     return {

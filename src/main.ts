@@ -6,9 +6,8 @@ import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
-import { getCronScheduler } from './cron/cronScheduler.js';
-import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
-import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
+import { getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
+import { getWorldAddress } from './config/manifest.js';
 import {
   getAllBlockchainEventHandlers,
   getBlockchainEventHandler,
@@ -26,15 +25,7 @@ global.WorkerGlobalScope = global;
 // Initialize transaction queue
 const txQueue = getTransactionQueue();
 
-// Initialize cron scheduler
-const cronScheduler = getCronScheduler();
 const workerBlockchainFilter = getWorkerBlockchainFilter();
-
-console.log('🎮 Jokers of Neon - Event Listener');
-console.log('═'.repeat(60));
-console.log(`Slot Env:     ${env.MANIFEST_SLOT_ENV}`);
-console.log('═'.repeat(60));
-console.log('');
 
 async function resolveGameBlockchain(
   gameId: number,
@@ -51,6 +42,13 @@ async function resolveGameBlockchain(
 }
 
 async function enqueueTransactions(transactions: EnqueueTransactionParams[]): Promise<void> {
+  if (!env.TRANSACTION_QUEUE_ENABLED) {
+    if (transactions.length > 0) {
+      console.log(`ℹ️  Transaction queue disabled; skipping ${transactions.length} transaction(s)`);
+    }
+    return;
+  }
+
   for (const transaction of transactions) {
     await txQueue.enqueue(transaction);
   }
@@ -405,13 +403,7 @@ async function handleLevelPassed(
   }
 }
 
-// Create main worker
-async function createWorker() {
-  // Preload remote configs
-  console.log('🔌 Loading remote Slot config and manifest...\n');
-  await preloadSlotConfig();
-  await preloadSlotManifest();
-
+export async function startToriiWorker() {
   const toriiUrl = getSlotToriiUrl();
   const relayUrl = getSlotRelayUrl();
   const worldAddress = getWorldAddress();
@@ -422,13 +414,6 @@ async function createWorker() {
   console.log('');
 
   console.log('🔌 Initializing Dojo SDK...\n');
-
-  // Initialize transaction queue
-  await txQueue.initialize();
-  console.log('');
-
-  // Start cron scheduler for pack distribution
-  cronScheduler.start();
 
   // Initialize SDK with example configuration
   const sdk = await init({
@@ -736,17 +721,8 @@ async function createWorker() {
   console.log('   - ProgressionGameUpdateEvent\n');
   console.log('Press Ctrl+C to stop\n');
 
-  // Keep the process alive
-  process.on('SIGINT', () => {
-    console.log('\n\n⏹️  Stopping listeners...');
+  return () => {
+    console.log('⏹️  Cancelling Torii subscription...');
     subscription.cancel();
-    cronScheduler.stop();
-    process.exit(0);
-  });
+  };
 }
-
-// Start the worker
-createWorker().catch((error) => {
-  console.error('❌ Fatal error starting worker:', error);
-  process.exit(1);
-});
