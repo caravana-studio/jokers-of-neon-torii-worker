@@ -181,6 +181,6 @@ Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el se
 
 Entry point: `src/index.ts` — one process for Torii, queue, crons, notifications, and agent.
 
-See `.env.example` for module flags. Mission generation enqueues `missions.generate_daily` and `missions.generate_weekly` (weekly was missing from the old cron repo).
+See `.env.example` for module flags. Mission generation enqueues `missions.generate_daily` and `missions.generate_weekly` to the `slot` adapter, which uses the Slot/Katana RPC resolved from `MANIFEST_SLOT_ENV`. Starknet public writes for profile/progression/NFT remain on the `starknet` adapter.
 
 Test on staging (`MANIFEST_SLOT_ENV` for test slot) before prod cutover.

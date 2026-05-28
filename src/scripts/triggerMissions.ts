@@ -24,8 +24,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  if (env.READONLY_MODE) {
-    console.error('Set STARKNET_PRIVATE_KEY (or PRIVATE_KEY) to enqueue mission intents.');
+  if (!env.SLOT_MASTER_ADDRESS || !env.SLOT_MASTER_PRIVATE_KEY) {
+    console.error('Set SLOT_MASTER_ADDRESS and SLOT_MASTER_PRIVATE_KEY to enqueue mission intents.');
     process.exit(1);
   }
 

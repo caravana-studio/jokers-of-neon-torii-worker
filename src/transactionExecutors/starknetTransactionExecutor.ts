@@ -3,7 +3,7 @@ import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
 
-let starknetRpcHealthCheckPromise: Promise<void> | null = null;
+const rpcHealthCheckPromises = new Map<string, Promise<void>>();
 
 function getStarknetProvider(): RpcProvider {
   return new RpcProvider({
@@ -18,14 +18,16 @@ function truncateBody(body: string): string {
   return body.length > 240 ? `${body.slice(0, 240)}...` : body;
 }
 
-async function ensureStarknetRpcReachable(): Promise<void> {
-  if (!starknetRpcHealthCheckPromise) {
-    starknetRpcHealthCheckPromise = (async () => {
-      const response = await fetch(env.STARKNET_RPC_URL, {
+export async function ensureStarknetRpcReachable(label: string, nodeUrl: string, apiKey = ''): Promise<void> {
+  const cacheKey = `${label}:${nodeUrl}`;
+
+  if (!rpcHealthCheckPromises.has(cacheKey)) {
+    const promise = (async () => {
+      const response = await fetch(nodeUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(env.STARKNET_RPC_API_KEY ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` } : {}),
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -42,27 +44,29 @@ async function ensureStarknetRpcReachable(): Promise<void> {
         parsed = JSON.parse(body);
       } catch {
         throw new Error(
-          `STARKNET_RPC_URL returned a non-JSON response (${response.status}). Check that it points to a Starknet JSON-RPC endpoint. Body: ${truncateBody(body)}`
+          `${label} returned a non-JSON response (${response.status}). Check that it points to a Starknet JSON-RPC endpoint. Body: ${truncateBody(body)}`
         );
       }
 
       const rpcResponse = parsed as { result?: unknown; error?: { code?: number; message?: string } };
       if (rpcResponse.error) {
         throw new Error(
-          `STARKNET_RPC_URL rejected starknet_chainId (${rpcResponse.error.code ?? 'unknown'}): ${rpcResponse.error.message ?? 'Unknown RPC error'}`
+          `${label} rejected starknet_chainId (${rpcResponse.error.code ?? 'unknown'}): ${rpcResponse.error.message ?? 'Unknown RPC error'}`
         );
       }
 
       if (!rpcResponse.result) {
-        throw new Error(`STARKNET_RPC_URL returned an invalid starknet_chainId response: ${truncateBody(body)}`);
+        throw new Error(`${label} returned an invalid starknet_chainId response: ${truncateBody(body)}`);
       }
-    })().catch(error => {
-      starknetRpcHealthCheckPromise = null;
+    })();
+
+    rpcHealthCheckPromises.set(cacheKey, promise.catch(error => {
+      rpcHealthCheckPromises.delete(cacheKey);
       throw error;
-    });
+    }));
   }
 
-  return starknetRpcHealthCheckPromise;
+  return rpcHealthCheckPromises.get(cacheKey)!;
 }
 
 function getStarknetAccount(): Account {
@@ -85,7 +89,7 @@ function ensureStarknetWriteConfig(): void {
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
-    await ensureStarknetRpcReachable();
+    await ensureStarknetRpcReachable('STARKNET_RPC_URL', env.STARKNET_RPC_URL, env.STARKNET_RPC_API_KEY);
 
     const call: Call = {
       contractAddress: transaction.contractAddress,

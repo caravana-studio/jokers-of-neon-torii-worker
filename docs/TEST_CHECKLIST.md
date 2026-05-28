@@ -4,8 +4,10 @@ Deploy one Background Worker with `MANIFEST_SLOT_ENV` pointing at your **test/st
 
 ## Environment
 
-- [ ] `MANIFEST_SLOT_ENV` = test slot (e.g. `dev`, `season3dev`)
-- [ ] `STARKNET_PRIVATE_KEY` / `STARKNET_ADDRESS` (operational account for queue + missions)
+- [ ] `MANIFEST_SLOT_ENV` = test slot (e.g. `testnet`, `prods3`)
+- [ ] `SLOT_MASTER_ADDRESS` / `SLOT_MASTER_PRIVATE_KEY` (account deployed on the selected Slot/Katana instance; used for mission generation)
+- [ ] `STARKNET_PRIVATE_KEY` / `STARKNET_ADDRESS` (public Starknet account for profile/progression/NFT writes)
+- [ ] `WORKER_BLOCKCHAIN_FILTER=slot,starknet,celo` if using a filter
 - [ ] `SUPABASE_URL` + `SUPABASE_ANON_KEY` (test project)
 - [ ] `TORII_LISTENER_ENABLED=true`
 - [ ] `TRANSACTION_QUEUE_ENABLED=true`
@@ -33,7 +35,7 @@ Deploy one Background Worker with `MANIFEST_SLOT_ENV` pointing at your **test/st
 
 ## Manual mission triggers (optional)
 
-With queue enabled and non-readonly Starknet config:
+With queue enabled and Slot write config:
 
 ```bash
 bun run trigger-missions          # both daily + weekly

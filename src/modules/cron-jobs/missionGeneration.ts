@@ -1,21 +1,22 @@
-import { env } from '../../env.js';
+import { env, isWorkerBlockchainEnabled } from '../../env.js';
 import { getTransactionQueue } from '../../transactionQueue.js';
 
 export async function enqueueGenerateDailyMissions(): Promise<void> {
   if (
     !env.MISSIONS_GENERATION_ENABLED ||
-    env.READONLY_MODE ||
     !env.TRANSACTION_QUEUE_ENABLED ||
-    !env.STARKNET_ADDRESS ||
-    !env.STARKNET_RPC_URL
+    !isWorkerBlockchainEnabled('slot') ||
+    !env.SLOT_MASTER_ADDRESS ||
+    !env.SLOT_MASTER_PRIVATE_KEY
   ) {
-    console.log('[GenerateDailyMissions] skipped (disabled, readonly, queue disabled, or missing Starknet config)');
+    console.log('[GenerateDailyMissions] skipped (disabled, queue disabled, Slot filtered out, or missing Slot write config)');
     return;
   }
 
   await getTransactionQueue().enqueue({
-    blockchain: 'starknet',
+    blockchain: 'slot',
     operation: 'missions.generate_daily',
+    targetRef: 'daily_missions_system',
     payload: {},
     metadata: { source: 'cron' },
   });
@@ -25,18 +26,19 @@ export async function enqueueGenerateDailyMissions(): Promise<void> {
 export async function enqueueGenerateWeeklyMissions(): Promise<void> {
   if (
     !env.MISSIONS_GENERATION_ENABLED ||
-    env.READONLY_MODE ||
     !env.TRANSACTION_QUEUE_ENABLED ||
-    !env.STARKNET_ADDRESS ||
-    !env.STARKNET_RPC_URL
+    !isWorkerBlockchainEnabled('slot') ||
+    !env.SLOT_MASTER_ADDRESS ||
+    !env.SLOT_MASTER_PRIVATE_KEY
   ) {
-    console.log('[GenerateWeeklyMissions] skipped (disabled, readonly, queue disabled, or missing Starknet config)');
+    console.log('[GenerateWeeklyMissions] skipped (disabled, queue disabled, Slot filtered out, or missing Slot write config)');
     return;
   }
 
   await getTransactionQueue().enqueue({
-    blockchain: 'starknet',
+    blockchain: 'slot',
     operation: 'missions.generate_weekly',
+    targetRef: 'daily_missions_system',
     payload: {},
     metadata: { source: 'cron' },
   });

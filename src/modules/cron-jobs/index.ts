@@ -1,5 +1,5 @@
 import type { CronJobDefinition } from '../../runtime/types.js';
-import { env } from '../../env.js';
+import { env, isWorkerBlockchainEnabled } from '../../env.js';
 import { enqueueGenerateDailyMissions, enqueueGenerateWeeklyMissions } from './missionGeneration.js';
 import { getMissionsReminderJob } from './missionsReminder.js';
 import { getFreePacksJob } from './freePacks.js';
@@ -10,8 +10,8 @@ export function getAllCronJobs(): CronJobDefinition[] {
   const missionGenerationEnabled =
     env.MISSIONS_GENERATION_ENABLED &&
     env.TRANSACTION_QUEUE_ENABLED &&
-    !env.READONLY_MODE &&
-    Boolean(env.STARKNET_ADDRESS && env.STARKNET_RPC_URL);
+    isWorkerBlockchainEnabled('slot') &&
+    Boolean(env.SLOT_MASTER_ADDRESS && env.SLOT_MASTER_PRIVATE_KEY);
 
   if (env.CRON_JOBS_ENABLED) {
     if (env.GENERATE_DAILY_MISSIONS_ENABLED) {

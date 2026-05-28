@@ -20,6 +20,10 @@ export const env = {
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || process.env.ADDRESS || '',
 
+  // Slot/Katana write account (for Dojo world transactions such as mission generation)
+  SLOT_MASTER_ADDRESS: process.env.SLOT_MASTER_ADDRESS || process.env.SLOT_ADDRESS || '',
+  SLOT_MASTER_PRIVATE_KEY: process.env.SLOT_MASTER_PRIVATE_KEY || process.env.SLOT_PRIVATE_KEY || '',
+
   // Celo / EVM Configuration (Optional - used for EVM execution)
   CELO_RPC_URL: process.env.CELO_RPC_URL || '',
   CELO_PRIVATE_KEY: process.env.CELO_PRIVATE_KEY || '',
@@ -116,6 +120,13 @@ function validateConfig() {
       console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS');
     }
   }
+
+  if (env.MISSIONS_GENERATION_ENABLED) {
+    const slotMissing = ['SLOT_MASTER_ADDRESS', 'SLOT_MASTER_PRIVATE_KEY'].filter(key => !env[key as keyof typeof env]);
+    if (slotMissing.length > 0) {
+      console.warn(`⚠️  Configuración de Slot incompleta para misiones: ${slotMissing.join(', ')}`);
+    }
+  }
 }
 
 validateConfig();
@@ -140,6 +151,11 @@ export function getWorkerBlockchainFilter(): BlockchainId[] | null {
   const parsed = values.filter(isConfiguredBlockchain);
 
   return Array.from(new Set(parsed));
+}
+
+export function isWorkerBlockchainEnabled(blockchain: BlockchainId): boolean {
+  const filter = getWorkerBlockchainFilter();
+  return !filter || filter.includes(blockchain);
 }
 
 

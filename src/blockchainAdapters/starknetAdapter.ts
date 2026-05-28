@@ -1,9 +1,15 @@
 import { shortString } from 'starknet';
 import { env } from '../env.js';
-import { getSlotDailyMissionsSystemAddress } from '../config/manifest.js';
 import type { BlockchainAdapter } from './types.js';
-import type { QueuedIntent, QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
+import {
+  isSlotTransactionOperation,
+  type QueuedIntent,
+  type QueuedTransaction,
+  type TransactionResult,
+} from '../transactionQueueTypes.js';
 import { executeStarknetQueueTransaction } from '../transactionExecutors/starknetTransactionExecutor.js';
+import { executeSlotQueueTransaction } from '../transactionExecutors/slotTransactionExecutor.js';
+import { buildSlotTransaction } from './slotAdapter.js';
 import {
   buildGameDataCalldata,
   buildPlayerStatsCalldata,
@@ -295,24 +301,6 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
-    case 'missions.generate_daily': {
-      return toLegacyTransaction(
-        intent,
-        getSlotDailyMissionsSystemAddress(),
-        'generate_daily_missions',
-        []
-      );
-    }
-
-    case 'missions.generate_weekly': {
-      return toLegacyTransaction(
-        intent,
-        getSlotDailyMissionsSystemAddress(),
-        'generate_weekly_missions',
-        []
-      );
-    }
-
     default:
       throw new Error(`Unsupported Starknet operation: ${intent.operation}`);
   }
@@ -327,6 +315,13 @@ export const starknetAdapter: BlockchainAdapter = {
 
   async execute(intent: QueuedIntent): Promise<TransactionResult> {
     try {
+      if (isSlotTransactionOperation(intent.operation)) {
+        console.warn(
+          `[starknetAdapter] Deprecated mission intent queued as blockchain="starknet"; routing ${intent.operation} to Slot. New intents should use blockchain="slot".`
+        );
+        return await executeSlotQueueTransaction(buildSlotTransaction(intent));
+      }
+
       return await executeStarknetQueueTransaction(buildLegacyTransaction(intent));
     } catch (error) {
       return {

@@ -15,6 +15,12 @@ export interface ChainConfig {
 }
 
 const chainConfigs = {
+  slot: {
+    blockchain: 'slot',
+    displayName: 'Slot / Katana',
+    slotChainId: -1,
+    kind: 'starknet',
+  },
   starknet: {
     blockchain: 'starknet',
     displayName: 'Starknet',
