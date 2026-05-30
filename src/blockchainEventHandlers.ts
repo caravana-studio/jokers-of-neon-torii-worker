@@ -54,7 +54,7 @@ export interface BlockchainEventHandler {
 function hasStarknetWriteConfig(...contractAddresses: string[]): boolean {
   return !!(
     env.STARKNET_PRIVATE_KEY &&
-    env.STARKNET_RPC_URL &&
+    env.BACKGROUND_STARKNET_RPC_URL &&
     env.STARKNET_ADDRESS &&
     contractAddresses.every(Boolean)
   );
