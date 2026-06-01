@@ -5,6 +5,7 @@ import type { QueuedIntent, TransactionResult } from '../transactionQueueTypes.j
 const SECONDS_IN_DAY = 86400;
 const DAY_START_OFFSET_SECONDS = 21600; // 6am UTC = 3am Argentina time.
 const MAX_STARKNET_ADDRESS = (1n << 251n) - 1n;
+const IGNORED_STREAK_USERNAME_PATTERN = /^(joker_guest_[0-9]+|guest_?[a-z0-9]+|burner[0-9]+)$/i;
 
 type StreakSyncStatus = 'confirmed' | 'pending' | 'failed';
 
@@ -55,6 +56,10 @@ function normalizeStarknetAddress(address: string): string {
   return `0x${value.toString(16).padStart(64, '0')}`;
 }
 
+function compactStarknetAddress(address: string): string {
+  return `0x${BigInt(normalizeStarknetAddress(address)).toString(16)}`;
+}
+
 function getCurrentDailyPeriodId(date = new Date()): number {
   return Math.floor((Math.floor(date.getTime() / 1000) - DAY_START_OFFSET_SECONDS) / SECONDS_IN_DAY);
 }
@@ -83,6 +88,21 @@ function calculateEffectiveStreak(input: {
   };
 }
 
+function isMissingSupabaseTable(error: { code?: string; message?: string; details?: string }): boolean {
+  const details = `${error.message ?? ''} ${error.details ?? ''}`.toLowerCase();
+  return (
+    error.code === '42P01' ||
+    error.code === 'PGRST205' ||
+    details.includes('schema cache') ||
+    details.includes('could not find the table')
+  );
+}
+
+function isIgnoredStreakUsername(username: string | null | undefined): boolean {
+  const normalized = String(username ?? '').trim();
+  return !normalized || IGNORED_STREAK_USERNAME_PATTERN.test(normalized);
+}
+
 async function getUsername(playerAddress: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('usernames')
@@ -91,7 +111,7 @@ async function getUsername(playerAddress: string): Promise<string | null> {
     .maybeSingle();
 
   if (error) {
-    if (error.code === '42P01') {
+    if (isMissingSupabaseTable(error)) {
       return null;
     }
     console.warn('[StreakCache] Could not read username', { playerAddress, error });
@@ -99,6 +119,52 @@ async function getUsername(playerAddress: string): Promise<string | null> {
   }
 
   return typeof data?.username === 'string' ? data.username : null;
+}
+
+async function getBurnerOwnerAddress(playerAddress: string): Promise<string | null> {
+  const addressCandidates = Array.from(
+    new Set([
+      normalizeStarknetAddress(playerAddress).toLowerCase(),
+      compactStarknetAddress(playerAddress).toLowerCase(),
+    ])
+  );
+  const { data, error } = await supabase
+    .from('user_burners')
+    .select('user_wallet')
+    .in('burner_address', addressCandidates)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingSupabaseTable(error)) {
+      return null;
+    }
+    console.warn('[StreakCache] Could not resolve burner owner for streak cache', {
+      playerAddress,
+      error,
+    });
+    return null;
+  }
+
+  return typeof data?.user_wallet === 'string' ? data.user_wallet : null;
+}
+
+async function resolveStreakUsername(playerAddress: string): Promise<string | null> {
+  const directUsername = await getUsername(playerAddress);
+  if (directUsername && !isIgnoredStreakUsername(directUsername)) {
+    return directUsername;
+  }
+
+  const ownerAddress = await getBurnerOwnerAddress(playerAddress);
+  if (!ownerAddress) {
+    return null;
+  }
+
+  const ownerUsername = await getUsername(normalizeStarknetAddress(ownerAddress));
+  if (isIgnoredStreakUsername(ownerUsername)) {
+    return null;
+  }
+
+  return ownerUsername;
 }
 
 async function getStreakRow(playerAddress: string): Promise<PlayerStreakRow | null> {
@@ -109,7 +175,7 @@ async function getStreakRow(playerAddress: string): Promise<PlayerStreakRow | nu
     .maybeSingle();
 
   if (error) {
-    if (error.code === '42P01') {
+    if (isMissingSupabaseTable(error)) {
       console.warn(
         '[StreakCache] player_streaks table missing; run supabase/migrations/20260526120000_create_player_streaks_tables.sql'
       );
@@ -146,7 +212,7 @@ async function insertStreakEvent(input: {
     metadata: input.metadata ?? {},
   });
 
-  if (error && error.code !== '42P01') {
+  if (error && !isMissingSupabaseTable(error)) {
     console.warn('[StreakCache] Could not insert streak event', error);
   }
 }
@@ -194,7 +260,15 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
       lastCompletedDay: event.periodId,
       protectorsAvailable: nextProtectors,
     });
-    const username = existing?.username ?? (await getUsername(playerAddress));
+    const username =
+      existing && !isIgnoredStreakUsername(existing.username)
+        ? existing.username
+        : await resolveStreakUsername(playerAddress);
+
+    if (!username) {
+      console.log(`[StreakCache] Skipping streak cache for player without real username: ${playerAddress}`);
+      return;
+    }
 
     const { error } = await supabase.from('player_streaks').upsert(
       {
@@ -218,7 +292,7 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
     );
 
     if (error) {
-      if (error.code === '42P01') {
+      if (isMissingSupabaseTable(error)) {
         console.warn('[StreakCache] player_streaks table missing; skip pending streak cache');
         return;
       }
@@ -282,6 +356,18 @@ export async function markDailyStreakTransactionCompleted(
 
   try {
     const existing = await getStreakRow(payload.playerAddress);
+    const username =
+      existing && !isIgnoredStreakUsername(existing.username)
+        ? existing.username
+        : await resolveStreakUsername(payload.playerAddress);
+
+    if (!username) {
+      console.log(
+        `[StreakCache] Skipping confirmed streak cache for player without real username: ${payload.playerAddress}`
+      );
+      return;
+    }
+
     const currentStreak = Math.max(1, existing ? toNumber(existing.current_streak) : 1);
     const longestStreak = Math.max(currentStreak, existing ? toNumber(existing.longest_streak) : 0);
     const lastCompletedDay = Math.max(payload.periodId, existing ? toNumber(existing.last_completed_day) : 0);
@@ -295,6 +381,7 @@ export async function markDailyStreakTransactionCompleted(
     const { data, error } = await supabase
       .from('player_streaks')
       .update({
+        username,
         current_streak: currentStreak,
         effective_streak: effective.effectiveStreak,
         longest_streak: longestStreak,
@@ -317,14 +404,13 @@ export async function markDailyStreakTransactionCompleted(
       .maybeSingle();
 
     if (error) {
-      if (error.code === '42P01') {
+      if (isMissingSupabaseTable(error)) {
         return;
       }
       throw error;
     }
 
     if (!data) {
-      const username = existing?.username ?? (await getUsername(payload.playerAddress));
       const { error: upsertError } = await supabase.from('player_streaks').upsert(
         {
           player_address: payload.playerAddress,
@@ -348,7 +434,7 @@ export async function markDailyStreakTransactionCompleted(
         { onConflict: 'player_address' }
       );
 
-      if (upsertError && upsertError.code !== '42P01') {
+      if (upsertError && !isMissingSupabaseTable(upsertError)) {
         throw upsertError;
       }
     }
@@ -378,16 +464,30 @@ export async function markDailyStreakTransactionFailed(
   }
 
   try {
+    const existing = await getStreakRow(payload.playerAddress);
+    const username =
+      existing && !isIgnoredStreakUsername(existing.username)
+        ? existing.username
+        : await resolveStreakUsername(payload.playerAddress);
+
+    if (!username) {
+      console.log(
+        `[StreakCache] Skipping failed streak cache for player without real username: ${payload.playerAddress}`
+      );
+      return;
+    }
+
     const { error } = await supabase
       .from('player_streaks')
       .update({
+        username,
         sync_status: 'failed',
         last_synced_at: new Date().toISOString(),
       })
       .eq('player_address', payload.playerAddress)
       .eq('pending_period_id', payload.periodId);
 
-    if (error && error.code !== '42P01') {
+    if (error && !isMissingSupabaseTable(error)) {
       throw error;
     }
 
