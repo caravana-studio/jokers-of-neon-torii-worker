@@ -7,10 +7,13 @@ import { getTransactionQueue } from './transactionQueue.js';
 import {
   EmptyGameDataError,
   fetchFullGameData,
-  resolveGameBlockchainFromData,
   saveGameStep,
-  type FullGameData,
 } from './services/gameStepsService.js';
+import {
+  rememberWorkerGameContext,
+  resolveWorkerGameContext,
+  shouldLogWorkerGame,
+} from './services/workerGameFilter.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
 import { getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
 import { getWorldAddress } from './config/manifest.js';
@@ -32,55 +35,7 @@ global.WorkerGlobalScope = global;
 const txQueue = getTransactionQueue();
 
 const workerBlockchainFilter = getWorkerBlockchainFilter();
-const AGENT_PLAYER_NAME_PREFIX = 'chichilo';
 const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
-
-interface GameLogContext {
-  blockchain: BlockchainId;
-  suppressLogs: boolean;
-}
-
-const gameLogContexts = new Map<number, GameLogContext>();
-
-function getGamePlayerName(data: FullGameData): string {
-  const game = data.game;
-  if (game && typeof game === 'object' && 'player_name' in game) {
-    return String((game as { player_name?: unknown }).player_name ?? '');
-  }
-
-  if ('player_name' in data) {
-    return String(data.player_name ?? '');
-  }
-
-  return '';
-}
-
-function shouldSuppressGameLogs(data: FullGameData): boolean {
-  return getGamePlayerName(data).trim().toLowerCase().startsWith(AGENT_PLAYER_NAME_PREFIX);
-}
-
-function rememberGameLogContext(gameId: number, data: FullGameData): GameLogContext {
-  const context = {
-    blockchain: resolveGameBlockchainFromData(gameId, data),
-    suppressLogs: shouldSuppressGameLogs(data),
-  };
-  gameLogContexts.set(gameId, context);
-  return context;
-}
-
-async function resolveGameLogContext(gameId: number): Promise<GameLogContext> {
-  const cached = gameLogContexts.get(gameId);
-  if (cached) {
-    return cached;
-  }
-
-  const data = await fetchFullGameData(gameId, { logRequest: false });
-  return rememberGameLogContext(gameId, data);
-}
-
-function shouldLogGame(gameId: number): boolean {
-  return gameLogContexts.get(gameId)?.suppressLogs !== true;
-}
 
 function compactValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -337,7 +292,7 @@ async function handleMissionCompleted(event: MissionCompletedEventData, options:
     await markDailyStreakPending(event);
 
     if (event.periodType === 'daily' && event.gameId > 0) {
-      const sourceBlockchain = (await resolveGameLogContext(event.gameId)).blockchain;
+      const sourceBlockchain = (await resolveWorkerGameContext(event.gameId)).blockchain;
       if (shouldLog) {
         logWorkerLine('event', {
           type: 'mission_routing',
@@ -368,7 +323,7 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
   try {
     // Check if Supabase is configured
     if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
-      if (shouldLogGame(gameId)) {
+      if (shouldLogWorkerGame(gameId)) {
         logWorkerLine('event', {
           type: 'current_hand',
           game: gameId,
@@ -381,8 +336,12 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
     }
 
     const gameData = await fetchFullGameData(gameId, { logRequest: false });
-    const { blockchain, suppressLogs } = rememberGameLogContext(gameId, gameData);
+    const { blockchain, suppressLogs, suppressTransactions } = rememberWorkerGameContext(gameId, gameData);
     if (!shouldProcessBlockchain(blockchain)) {
+      return;
+    }
+
+    if (suppressTransactions) {
       return;
     }
 
@@ -401,14 +360,14 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
     }
   } catch (error) {
     if (error instanceof EmptyGameDataError) {
-      if (shouldLogGame(gameId)) {
+      if (shouldLogWorkerGame(gameId)) {
         console.warn(`⚠️  Skipping game step: ${error.message}`);
       }
     } else {
       console.error('❌ Error saving game step:', error);
     }
 
-    if (shouldLogGame(gameId)) {
+    if (shouldLogWorkerGame(gameId)) {
       logWorkerLine('torii', { action: 'continue_after_game_step_error', game: gameId });
     }
   }
@@ -639,15 +598,21 @@ export async function startToriiWorker() {
               if (missionEvent) {
                 if (shouldProcessBlockchain('starknet')) {
                   let shouldLog = true;
+                  let shouldProcessEvent = true;
                   if (missionEvent.gameId > 0) {
                     try {
-                      shouldLog = !(await resolveGameLogContext(missionEvent.gameId)).suppressLogs;
+                      const context = await resolveWorkerGameContext(missionEvent.gameId);
+                      shouldLog = !context.suppressLogs;
+                      shouldProcessEvent = !context.suppressTransactions;
                     } catch {
                       shouldLog = true;
+                      shouldProcessEvent = true;
                     }
                   }
 
-                  await handleMissionCompleted(missionEvent, { log: shouldLog });
+                  if (shouldProcessEvent) {
+                    await handleMissionCompleted(missionEvent, { log: shouldLog });
+                  }
                 }
               } else {
                 logWorkerLine('event', { type: 'mission_completed', result: 'skip', reason: 'incomplete' });
@@ -661,10 +626,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs } = await resolveGameLogContext(gameId);
+                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain)) {
+                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
                   await handleCreateGame(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -698,10 +663,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs } = await resolveGameLogContext(gameId);
+                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain)) {
+                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
                   await handlePlayWinGame(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -716,10 +681,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs } = await resolveGameLogContext(gameId);
+                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain)) {
+                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
                   await handleGameOver(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -734,10 +699,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined && event.previous_level !== undefined && event.new_level !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs } = await resolveGameLogContext(gameId);
+                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain)) {
+                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
                   await handleLevelPassed(
                     event.player,
                     gameId,
@@ -765,10 +730,10 @@ export async function startToriiWorker() {
                 event.max_round !== undefined
               ) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs } = await resolveGameLogContext(gameId);
+                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain)) {
+                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
                   await handleProgressionUpdated(
                     event.player,
                     gameId,
