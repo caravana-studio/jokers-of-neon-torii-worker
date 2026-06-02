@@ -6,9 +6,8 @@ import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
 import { EmptyGameDataError, fetchAndSaveGameStep, fetchGameBlockchain } from './services/gameStepsService.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
-import { getCronScheduler } from './cron/cronScheduler.js';
-import { preloadSlotConfig, getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
-import { preloadSlotManifest, getWorldAddress } from './config/manifest.js';
+import { getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
+import { getWorldAddress } from './config/manifest.js';
 import {
   getAllBlockchainEventHandlers,
   getBlockchainEventHandler,
@@ -26,15 +25,7 @@ global.WorkerGlobalScope = global;
 // Initialize transaction queue
 const txQueue = getTransactionQueue();
 
-// Initialize cron scheduler
-const cronScheduler = getCronScheduler();
 const workerBlockchainFilter = getWorkerBlockchainFilter();
-
-console.log('🎮 Jokers of Neon - Event Listener');
-console.log('═'.repeat(60));
-console.log(`Slot Env:     ${env.MANIFEST_SLOT_ENV}`);
-console.log('═'.repeat(60));
-console.log('');
 
 async function resolveGameBlockchain(
   gameId: number,
@@ -51,6 +42,13 @@ async function resolveGameBlockchain(
 }
 
 async function enqueueTransactions(transactions: EnqueueTransactionParams[]): Promise<void> {
+  if (!env.TRANSACTION_QUEUE_ENABLED) {
+    if (transactions.length > 0) {
+      console.log(`ℹ️  Transaction queue disabled; skipping ${transactions.length} transaction(s)`);
+    }
+    return;
+  }
+
   for (const transaction of transactions) {
     await txQueue.enqueue(transaction);
   }
@@ -99,6 +97,8 @@ async function buildTransactionsForGameBlockchain(
 
 const MISSION_PERIOD_DAILY = 1;
 const MISSION_PERIOD_WEEKLY = 2;
+const CURRENT_HAND_DEDUPE_WINDOW_MS = 5000;
+const recentCurrentHandEvents = new Map<string, number>();
 
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number') {
@@ -210,6 +210,25 @@ function normalizeMissionCompletedEvent(rawEvent: unknown): MissionCompletedEven
     xp: 0,
     gameId: 0,
   };
+}
+
+function shouldProcessCurrentHandEvent(gameId: number, cards: number[]): boolean {
+  const now = Date.now();
+  const key = `${gameId}:${cards.join(',')}`;
+
+  for (const [eventKey, timestamp] of recentCurrentHandEvents) {
+    if (now - timestamp > CURRENT_HAND_DEDUPE_WINDOW_MS) {
+      recentCurrentHandEvents.delete(eventKey);
+    }
+  }
+
+  const previousTimestamp = recentCurrentHandEvents.get(key);
+  if (previousTimestamp && now - previousTimestamp <= CURRENT_HAND_DEDUPE_WINDOW_MS) {
+    return false;
+  }
+
+  recentCurrentHandEvents.set(key, now);
+  return true;
 }
 
 /**
@@ -405,13 +424,7 @@ async function handleLevelPassed(
   }
 }
 
-// Create main worker
-async function createWorker() {
-  // Preload remote configs
-  console.log('🔌 Loading remote Slot config and manifest...\n');
-  await preloadSlotConfig();
-  await preloadSlotManifest();
-
+export async function startToriiWorker() {
   const toriiUrl = getSlotToriiUrl();
   const relayUrl = getSlotRelayUrl();
   const worldAddress = getWorldAddress();
@@ -422,13 +435,6 @@ async function createWorker() {
   console.log('');
 
   console.log('🔌 Initializing Dojo SDK...\n');
-
-  // Initialize transaction queue
-  await txQueue.initialize();
-  console.log('');
-
-  // Start cron scheduler for pack distribution
-  cronScheduler.start();
 
   // Initialize SDK with example configuration
   const sdk = await init({
@@ -522,17 +528,24 @@ async function createWorker() {
               // Process the event
               if (event.game_id !== undefined && event.cards !== undefined) {
                 const gameId = Number(event.game_id);
+                const cards = Array.isArray(event.cards) ? event.cards.map(Number) : [];
+
+                if (!shouldProcessCurrentHandEvent(gameId, cards)) {
+                  console.log(`↩️  Duplicate CurrentHandEvent skipped: game_id=${gameId}, cards=[${cards.join(', ')}]`);
+                  continue;
+                }
+
                 const blockchain = await resolveGameBlockchain(gameId, { logTarget: false, logFetch: false });
 
                 if (shouldProcessBlockchain(blockchain)) {
                   console.log('\n🎮 CurrentHandEvent found!');
                   console.log(`   Entity ID:     ${entityId}`);
                   console.log(`   Game ID:       ${gameId}`);
-                  console.log(`   Cards:         [${event.cards.join(', ')}]`);
+                  console.log(`   Cards:         [${cards.join(', ')}]`);
                   console.log(`   Timestamp:     ${new Date().toISOString()}`);
                   console.log('─'.repeat(60));
 
-                  await handleCurrentHand(gameId, event.cards);
+                  await handleCurrentHand(gameId, cards);
                 }
               } else {
                 console.log('⚠️  Incomplete CurrentHandEvent - will not be processed');
@@ -736,17 +749,8 @@ async function createWorker() {
   console.log('   - ProgressionGameUpdateEvent\n');
   console.log('Press Ctrl+C to stop\n');
 
-  // Keep the process alive
-  process.on('SIGINT', () => {
-    console.log('\n\n⏹️  Stopping listeners...');
+  return () => {
+    console.log('⏹️  Cancelling Torii subscription...');
     subscription.cancel();
-    cronScheduler.stop();
-    process.exit(0);
-  });
+  };
 }
-
-// Start the worker
-createWorker().catch((error) => {
-  console.error('❌ Fatal error starting worker:', error);
-  process.exit(1);
-});

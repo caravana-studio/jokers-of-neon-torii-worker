@@ -20,6 +20,7 @@ const INTENT_QUEUE_TABLE = 'torii_worker_intent_queue';
  * Processes transactions sequentially with validation and Supabase persistence
  */
 export class TransactionQueue {
+  private enabled = env.TRANSACTION_QUEUE_ENABLED;
   private processing = false;
   private currentTransactionId: string | null = null;
   private useSupabase: boolean;
@@ -27,9 +28,11 @@ export class TransactionQueue {
 
   constructor() {
     // Check if Supabase is configured
-    this.useSupabase = !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
+    this.useSupabase = this.enabled && !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 
-    if (!this.useSupabase) {
+    if (!this.enabled) {
+      console.warn('⚠️  Transaction queue disabled by TRANSACTION_QUEUE_ENABLED=false');
+    } else if (!this.useSupabase) {
       console.warn('⚠️  Supabase not configured - running in memory-only mode');
       console.warn('⚠️  Transactions will be lost on restart!');
     }
@@ -39,6 +42,11 @@ export class TransactionQueue {
    * Initialize the queue by recovering pending transactions
    */
   public async initialize(): Promise<void> {
+    if (!this.enabled) {
+      console.log('💼 Transaction Queue: Disabled');
+      return;
+    }
+
     if (!this.useSupabase) {
       console.log('💼 Transaction Queue: Initialized (memory-only mode)');
       return;
@@ -113,6 +121,10 @@ export class TransactionQueue {
    * Add a transaction to the queue
    */
   public async enqueue(params: EnqueueTransactionParams): Promise<string> {
+    if (!this.enabled) {
+      throw new Error('Transaction queue is disabled (TRANSACTION_QUEUE_ENABLED=false)');
+    }
+
     const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const maxRetries = params.maxRetries ?? 3;
 
@@ -168,6 +180,10 @@ export class TransactionQueue {
    * Process the queue sequentially
    */
   private async processQueue(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
     if (this.processing) {
       return;
     }

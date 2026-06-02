@@ -12,6 +12,8 @@ interface FetchFullGameDataOptions {
   logRequest?: boolean;
 }
 
+const gameStepLocks = new Map<number, Promise<void>>();
+
 /**
  * Custom error for empty or invalid API responses
  */
@@ -86,6 +88,28 @@ export async function fetchGameBlockchain(
   );
 }
 
+async function withGameStepLock<T>(gameId: number, task: () => Promise<T>): Promise<T> {
+  const previous = gameStepLocks.get(gameId) ?? Promise.resolve();
+
+  let release!: () => void;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  gameStepLocks.set(gameId, queued);
+
+  await previous.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    release();
+    if (gameStepLocks.get(gameId) === queued) {
+      gameStepLocks.delete(gameId);
+    }
+  }
+}
+
 /**
  * Gets the next step number for a game_id
  * Steps are 0-indexed, so first step is 0
@@ -123,7 +147,7 @@ export async function saveGameStep(gameId: number, data: FullGameData): Promise<
     return null;
   }
 
-  try {
+  return withGameStepLock(gameId, async () => {
     // Get the next step number for this game
     const step = await getNextStep(gameId);
 
@@ -150,10 +174,10 @@ export async function saveGameStep(gameId: number, data: FullGameData): Promise<
       id: insertedData.id,
       step: insertedData.step,
     };
-  } catch (error) {
+  }).catch(error => {
     console.error('❌ Error saving game step:', error);
     throw error;
-  }
+  });
 }
 
 /**

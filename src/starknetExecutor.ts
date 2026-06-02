@@ -3,6 +3,7 @@ import { env } from './env.js';
 import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
 import { getSlotRpcUrl } from './config/slotConfig.js';
 import { getSlotGameViewsAddress } from './config/manifest.js';
+import { withStarknetWriteLock } from './runtime/StarknetWriteCoordinator.js';
 
 /**
  * RoundData structure for set_round_data
@@ -60,21 +61,24 @@ export async function executeStarknetTransaction(params: {
   console.log(`[${new Date().toISOString()}] Ejecutando ${call.entrypoint} en Starknet...`);
 
   // Ejecutar transacción usando 'latest' en lugar de 'pending' (Cartridge no soporta pending)
-  const starknetNonce = await account.getNonce();
-  const { transaction_hash } = await account.execute(call, {
-    nonce: starknetNonce,
-    skipValidate: true,
+  const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
+    const starknetNonce = await account.getNonce();
+    const { transaction_hash } = await account.execute(call, {
+      nonce: starknetNonce,
+      skipValidate: true,
+    });
+    return transaction_hash;
   });
 
-  console.log(`✅ Transacción enviada: ${transaction_hash}`);
+  console.log(`✅ Transacción enviada: ${transactionHash}`);
 
   // Esperar confirmación
   console.log('⏳ Esperando confirmación...');
-  await account.waitForTransaction(transaction_hash);
+  await account.waitForTransaction(transactionHash);
 
-  console.log(`✅ Transacción confirmada: ${transaction_hash}\n`);
+  console.log(`✅ Transacción confirmada: ${transactionHash}\n`);
 
-  return transaction_hash;
+  return transactionHash;
 }
 
 /**
