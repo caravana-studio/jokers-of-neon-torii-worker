@@ -336,12 +336,8 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
     }
 
     const gameData = await fetchFullGameData(gameId, { logRequest: false });
-    const { blockchain, suppressLogs, suppressTransactions } = rememberWorkerGameContext(gameId, gameData);
+    const { blockchain, suppressLogs } = rememberWorkerGameContext(gameId, gameData);
     if (!shouldProcessBlockchain(blockchain)) {
-      return;
-    }
-
-    if (suppressTransactions) {
       return;
     }
 
@@ -598,21 +594,16 @@ export async function startToriiWorker() {
               if (missionEvent) {
                 if (shouldProcessBlockchain('starknet')) {
                   let shouldLog = true;
-                  let shouldProcessEvent = true;
                   if (missionEvent.gameId > 0) {
                     try {
                       const context = await resolveWorkerGameContext(missionEvent.gameId);
                       shouldLog = !context.suppressLogs;
-                      shouldProcessEvent = !context.suppressTransactions;
                     } catch {
                       shouldLog = true;
-                      shouldProcessEvent = true;
                     }
                   }
 
-                  if (shouldProcessEvent) {
-                    await handleMissionCompleted(missionEvent, { log: shouldLog });
-                  }
+                  await handleMissionCompleted(missionEvent, { log: shouldLog });
                 }
               } else {
                 logWorkerLine('event', { type: 'mission_completed', result: 'skip', reason: 'incomplete' });
@@ -626,10 +617,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
+                const { blockchain, suppressLogs } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
+                if (shouldProcessBlockchain(blockchain)) {
                   await handleCreateGame(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -663,10 +654,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
+                const { blockchain, suppressLogs } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
+                if (shouldProcessBlockchain(blockchain)) {
                   await handlePlayWinGame(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -681,10 +672,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
+                const { blockchain, suppressLogs } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
+                if (shouldProcessBlockchain(blockchain)) {
                   await handleGameOver(event.player, gameId, blockchain, { log: shouldLog });
                 }
               } else {
@@ -699,10 +690,10 @@ export async function startToriiWorker() {
               // Process the event
               if (event.player && event.game_id !== undefined && event.previous_level !== undefined && event.new_level !== undefined) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
+                const { blockchain, suppressLogs } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
+                if (shouldProcessBlockchain(blockchain)) {
                   await handleLevelPassed(
                     event.player,
                     gameId,
@@ -730,10 +721,10 @@ export async function startToriiWorker() {
                 event.max_round !== undefined
               ) {
                 const gameId = Number(event.game_id);
-                const { blockchain, suppressLogs, suppressTransactions } = await resolveWorkerGameContext(gameId);
+                const { blockchain, suppressLogs } = await resolveWorkerGameContext(gameId);
                 const shouldLog = !suppressLogs;
 
-                if (shouldProcessBlockchain(blockchain) && !suppressTransactions) {
+                if (shouldProcessBlockchain(blockchain)) {
                   await handleProgressionUpdated(
                     event.player,
                     gameId,

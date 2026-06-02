@@ -11,7 +11,6 @@ export interface WorkerGameContext {
   blockchain: BlockchainId;
   playerName: string;
   suppressLogs: boolean;
-  suppressTransactions: boolean;
 }
 
 const gameContexts = new Map<number, WorkerGameContext>();
@@ -41,7 +40,6 @@ export function rememberWorkerGameContext(gameId: number, data: FullGameData): W
     blockchain: resolveGameBlockchainFromData(gameId, data),
     playerName: getGamePlayerName(data),
     suppressLogs: suppress,
-    suppressTransactions: suppress,
   };
 
   gameContexts.set(gameId, context);

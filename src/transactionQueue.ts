@@ -5,7 +5,6 @@ import {
   markDailyStreakTransactionCompleted,
   markDailyStreakTransactionFailed,
 } from './services/streakCacheService.js';
-import { resolveWorkerGameContext } from './services/workerGameFilter.js';
 import {
   isTransactionOperation,
   type EnqueueTransactionParams,
@@ -36,32 +35,6 @@ function compactHash(value: string | undefined): string | undefined {
   return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
 }
 
-function toPositiveGameId(value: unknown): number | null {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
-
-  const parsed = typeof value === 'number' ? value : Number(String(value));
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function getRecordField(value: unknown, field: string): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return undefined;
-  }
-
-  return (value as Record<string, unknown>)[field];
-}
-
-function getIntentGameId(intent: QueuedIntent): number | null {
-  return (
-    toPositiveGameId(intent.metadata.gameId) ??
-    toPositiveGameId(intent.metadata.sourceGameId) ??
-    toPositiveGameId(intent.payload.gameId) ??
-    toPositiveGameId(getRecordField(intent.payload.game, 'id'))
-  );
-}
-
 /**
  * Persistent Transaction Queue Manager
  * Processes transactions sequentially with validation and Supabase persistence
@@ -72,7 +45,6 @@ export class TransactionQueue {
   private currentTransactionId: string | null = null;
   private useSupabase: boolean;
   private blockchainFilter = getWorkerBlockchainFilter();
-  private skippedSuppressedGameIds = new Set<number>();
 
   constructor() {
     // Check if Supabase is configured
@@ -246,19 +218,6 @@ export class TransactionQueue {
       }
 
       this.currentTransactionId = transaction.id;
-      const suppressedGameId = await this.getSuppressedWorkerGameId(transaction);
-      if (suppressedGameId !== null) {
-        if (!this.skippedSuppressedGameIds.has(suppressedGameId)) {
-          console.log(`[queue] skip_suppressed_game game=${suppressedGameId}`);
-          this.skippedSuppressedGameIds.add(suppressedGameId);
-        }
-
-        await this.updateTransactionStatus(transaction.id, 'completed', undefined, { log: false });
-        this.currentTransactionId = null;
-        await this.sleep(20);
-        continue;
-      }
-
       const shouldLog = shouldLogTransaction(transaction);
       loggedAnyTransaction ||= shouldLog;
 
@@ -274,6 +233,23 @@ export class TransactionQueue {
       const result = await this.executeTransaction(transaction);
 
       if (result.success) {
+        if (!result.transactionHash) {
+          const errorMessage = 'Transaction adapter returned success without transactionHash';
+          console.error('[queue] transaction_success_missing_hash:', {
+            id: transaction.id,
+            blockchain: transaction.blockchain,
+            operation: transaction.operation,
+            targetRef: transaction.targetRef,
+            payload: transaction.payload,
+            metadata: transaction.metadata,
+          });
+
+          await this.updateTransactionStatus(transaction.id, 'failed', { errorMessage });
+          this.currentTransactionId = null;
+          await this.sleep(100);
+          continue;
+        }
+
         if (shouldLog) {
           console.log(`[queue] completed id=${transaction.id} hash=${compactHash(result.transactionHash)}`);
         }
@@ -487,23 +463,6 @@ export class TransactionQueue {
    */
   private async executeTransaction(transaction: QueuedIntent): Promise<TransactionResult> {
     return executeIntent(transaction);
-  }
-
-  private async getSuppressedWorkerGameId(transaction: QueuedIntent): Promise<number | null> {
-    const gameId = getIntentGameId(transaction);
-    if (!gameId) {
-      return null;
-    }
-
-    try {
-      const context = await resolveWorkerGameContext(gameId);
-      return context.suppressTransactions ? gameId : null;
-    } catch (error) {
-      console.warn(
-        `[queue] suppress_check_failed id=${transaction.id} game=${gameId} error=${error instanceof Error ? error.message : error}`
-      );
-      return null;
-    }
   }
 
   /**
