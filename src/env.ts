@@ -102,13 +102,24 @@ function describeRpcEndpoint(rawUrl: string): string {
 
   try {
     const url = new URL(rawUrl);
-    const path = url.pathname
+    const segments = url.pathname
       .split('/')
       .filter(Boolean)
-      .slice(0, 2)
-      .join('/');
+    const [first, second] = segments;
 
-    return path ? `${url.hostname}/${path}` : url.hostname;
+    if (first === 'v2') {
+      return `${url.hostname}/v2/[redacted]`;
+    }
+
+    if (first === 'starknet' && second === 'version') {
+      return `${url.hostname}/starknet/version`;
+    }
+
+    if (first) {
+      return `${url.hostname}/${first}${segments.length > 1 ? '/...' : ''}`;
+    }
+
+    return url.hostname;
   } catch {
     return rawUrl.length > 40 ? `${rawUrl.slice(0, 24)}...` : rawUrl;
   }
