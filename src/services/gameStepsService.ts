@@ -12,6 +12,12 @@ interface FetchFullGameDataOptions {
   logRequest?: boolean;
 }
 
+interface SaveGameStepOptions {
+  log?: boolean;
+}
+
+const gameStepLocks = new Map<number, Promise<void>>();
+
 /**
  * Custom error for empty or invalid API responses
  */
@@ -47,7 +53,7 @@ export async function fetchFullGameData(gameId: number, options: FetchFullGameDa
   const url = `${env.FULL_GAME_API_URL}?game_id=${gameId}`;
 
   if (logRequest) {
-    console.log(`   Fetching game data from API: ${url}`);
+    console.log(`[game-api] fetch game=${gameId} url=${url}`);
   }
 
   const response = await fetch(url);
@@ -75,6 +81,10 @@ export async function fetchGameBlockchain(
   options: FetchFullGameDataOptions = {}
 ): Promise<BlockchainId> {
   const data = await fetchFullGameData(gameId, options);
+  return resolveGameBlockchainFromData(gameId, data);
+}
+
+export function resolveGameBlockchainFromData(gameId: number, data: FullGameData): BlockchainId {
   const blockchain = resolveConfiguredBlockchain(data.blockchain);
 
   if (blockchain) {
@@ -84,6 +94,28 @@ export async function fetchGameBlockchain(
   throw new Error(
     `FULL_GAME_API_URL did not include a valid blockchain for game_id=${gameId}. Received ${String(data.blockchain)}. Supported values: ${formatConfiguredBlockchains()}`
   );
+}
+
+async function withGameStepLock<T>(gameId: number, task: () => Promise<T>): Promise<T> {
+  const previous = gameStepLocks.get(gameId) ?? Promise.resolve();
+
+  let release!: () => void;
+  const current = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => undefined).then(() => current);
+  gameStepLocks.set(gameId, queued);
+
+  await previous.catch(() => undefined);
+
+  try {
+    return await task();
+  } finally {
+    release();
+    if (gameStepLocks.get(gameId) === queued) {
+      gameStepLocks.delete(gameId);
+    }
+  }
 }
 
 /**
@@ -116,18 +148,24 @@ async function getNextStep(gameId: number): Promise<number> {
  * @param data - The game data from the API
  * @returns The created game step record
  */
-export async function saveGameStep(gameId: number, data: FullGameData): Promise<{ id: string; step: number } | null> {
+export async function saveGameStep(
+  gameId: number,
+  data: FullGameData,
+  options: SaveGameStepOptions = {}
+): Promise<{ id: string; step: number } | null> {
+  const shouldLog = options.log !== false;
+
   // Check if Supabase is configured
   if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
-    console.log('ℹ️  Supabase not configured - skipping game step save');
+    if (shouldLog) {
+      console.log(`[game-step] skip game=${gameId} reason=supabase_unconfigured`);
+    }
     return null;
   }
 
-  try {
+  return withGameStepLock(gameId, async () => {
     // Get the next step number for this game
     const step = await getNextStep(gameId);
-
-    console.log(`   Saving game step: game_id=${gameId}, step=${step}`);
 
     // Insert the game step
     const { data: insertedData, error } = await supabase
@@ -144,16 +182,18 @@ export async function saveGameStep(gameId: number, data: FullGameData): Promise<
       throw error;
     }
 
-    console.log(`✅ Game step saved: id=${insertedData.id}, step=${step}`);
+    if (shouldLog) {
+      console.log(`[game-step] saved game=${gameId} step=${step} id=${insertedData.id}`);
+    }
 
     return {
       id: insertedData.id,
       step: insertedData.step,
     };
-  } catch (error) {
+  }).catch(error => {
     console.error('❌ Error saving game step:', error);
     throw error;
-  }
+  });
 }
 
 /**
@@ -161,10 +201,13 @@ export async function saveGameStep(gameId: number, data: FullGameData): Promise<
  * @param gameId - The game ID
  * @returns The created game step record or null if Supabase is not configured
  */
-export async function fetchAndSaveGameStep(gameId: number): Promise<{ id: string; step: number } | null> {
+export async function fetchAndSaveGameStep(
+  gameId: number,
+  options: FetchFullGameDataOptions & SaveGameStepOptions = {}
+): Promise<{ id: string; step: number } | null> {
   // Fetch game data from external API
-  const gameData = await fetchFullGameData(gameId);
+  const gameData = await fetchFullGameData(gameId, { logRequest: options.logRequest });
 
   // Save to database
-  return await saveGameStep(gameId, gameData);
+  return await saveGameStep(gameId, gameData, { log: options.log });
 }

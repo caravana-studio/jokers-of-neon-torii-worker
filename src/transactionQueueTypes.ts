@@ -13,7 +13,9 @@ export type TransactionOperation =
   | 'stats.game_created'
   | 'stats.game_won'
   | 'stats.player'
-  | 'pack.claimable.add';
+  | 'pack.claimable.add'
+  | 'missions.generate_daily'
+  | 'missions.generate_weekly';
 
 export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'game.snapshot',
@@ -29,6 +31,13 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'stats.game_won',
   'stats.player',
   'pack.claimable.add',
+  'missions.generate_daily',
+  'missions.generate_weekly',
+];
+
+export const SLOT_TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
+  'missions.generate_daily',
+  'missions.generate_weekly',
 ];
 
 export type TransactionStatus = 'pending' | 'processing' | 'completed' | 'failed';
@@ -75,4 +84,8 @@ export interface TransactionResult {
 
 export function isTransactionOperation(value: unknown): value is TransactionOperation {
   return typeof value === 'string' && TRANSACTION_OPERATIONS.includes(value as TransactionOperation);
+}
+
+export function isSlotTransactionOperation(value: unknown): value is TransactionOperation {
+  return typeof value === 'string' && SLOT_TRANSACTION_OPERATIONS.includes(value as TransactionOperation);
 }

@@ -15,6 +15,10 @@ interface PlayerRewardData {
   packs: number[]; // Array of pack IDs distributed
 }
 
+function compactAddress(address: string): string {
+  return address.startsWith('0x') && address.length > 18 ? `${address.slice(0, 10)}...${address.slice(-6)}` : address;
+}
+
 export class PackDistributionService {
   private txQueue = getTransactionQueue();
   private leaderboardService = getLeaderboardService();
@@ -159,7 +163,7 @@ export class PackDistributionService {
         throw error;
       }
 
-      console.log(`✅ Period rewards saved to database`);
+      console.log(`[packs] rewards_saved period=${periodId} type=${type} players=${rewardsData.length}`);
     } catch (error) {
       console.error('❌ Error saving period rewards:', error);
       throw error;
@@ -174,7 +178,7 @@ export class PackDistributionService {
     packId: number
   ): Promise<string | null> {
     try {
-      console.log(`   📦 Distributing pack ${packId} to ${player.player_name} (${player.owner})`);
+      console.log(`[packs] enqueue player=${compactAddress(player.owner)} pack=${packId} name=${player.player_name}`);
 
       // Enqueue transaction
       const txId = await this.txQueue.enqueue({
@@ -202,17 +206,22 @@ export class PackDistributionService {
    * Main entry point for distributing rewards
    */
   async distributeRewards(periodType: PeriodType): Promise<boolean> {
-    console.log(`\n🎁 Starting ${periodType} reward distribution...`);
+    console.log(`[packs] distribution_start type=${periodType}`);
 
     // Check if distribution is enabled
     if (!env.PACK_DISTRIBUTION_ENABLED) {
-      console.log('ℹ️  Pack distribution is disabled');
+      console.log(`[packs] skip type=${periodType} reason=disabled`);
+      return false;
+    }
+
+    if (!env.TRANSACTION_QUEUE_ENABLED) {
+      console.log(`[packs] skip type=${periodType} reason=queue_disabled`);
       return false;
     }
 
     // Check if required config is available
     if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
-      console.log('ℹ️  Profile System not configured (read-only mode)');
+      console.log(`[packs] skip type=${periodType} reason=profile_write_unconfigured`);
       return false;
     }
 
@@ -225,21 +234,21 @@ export class PackDistributionService {
 
     // Get the previous period ID (distribute rewards for yesterday/last week)
     const periodKey = this.getPreviousPeriodId(periodType);
-    console.log(`📅 Period: ${periodKey}`);
+    console.log(`[packs] period type=${periodType} id=${periodKey}`);
 
     // Check if already processed
     if (await this.isPeriodProcessed(periodType, periodKey)) {
-      console.log(`✅ Period ${periodKey} already processed, skipping`);
+      console.log(`[packs] skip type=${periodType} period=${periodKey} reason=already_processed`);
       return true;
     }
 
     try {
       // Get date range for this period
       const { startDate, endDate } = this.getDateRangeForPeriod(periodType);
-      console.log(`📅 Date range: ${startDate} to ${endDate}`);
+      console.log(`[packs] range type=${periodType} start=${startDate} end=${endDate}`);
 
       // Fetch leaderboard
-      console.log(`📊 Fetching top ${config.maxPosition} players...`);
+      console.log(`[packs] leaderboard_fetch type=${periodType} max=${config.maxPosition}`);
       const players = await this.leaderboardService.fetchTopPlayersForDateRange(
         config.maxPosition,
         startDate,
@@ -253,7 +262,7 @@ export class PackDistributionService {
         return true;
       }
 
-      console.log(`📊 Found ${players.length} players in leaderboard`);
+      console.log(`[packs] leaderboard_ready type=${periodType} players=${players.length}`);
 
       const rewardsData: PlayerRewardData[] = [];
 
@@ -291,9 +300,7 @@ export class PackDistributionService {
       await this.savePeriodRewards(periodType, periodKey, rewardsData);
 
       const totalPacks = rewardsData.reduce((sum, p) => sum + p.packs.length, 0);
-      console.log(`\n✅ Distribution completed (DRY RUN)`);
-      console.log(`   Players rewarded: ${rewardsData.length}`);
-      console.log(`   Total packs: ${totalPacks}`);
+      console.log(`[packs] distribution_done type=${periodType} period=${periodKey} players=${rewardsData.length} packs=${totalPacks}`);
 
       return true;
     } catch (error) {

@@ -18,6 +18,10 @@ function hexToString(hex: string): string {
   }
 }
 
+function compactUrl(url: string): string {
+  return url.length > 120 ? `${url.slice(0, 117)}...` : url;
+}
+
 /**
  * GraphQL query for fetching leaderboard data within a game ID range
  * Uses pagination with cursor to fetch all results
@@ -72,7 +76,7 @@ export class LeaderboardService {
     }
 
     const url = `${this.statsApiUrl}/api/stats/game-id-range?start_date=${startDate}&end_date=${endDate}`;
-    console.log(`📊 Fetching game ID range from ${url}`);
+    console.log(`[leaderboard] fetch_range start=${startDate} end=${endDate} url=${compactUrl(url)}`);
 
     try {
       const response = await fetch(url, {
@@ -114,13 +118,11 @@ export class LeaderboardService {
     gameIdRange: GameIdRange,
     isTournament: boolean = false
   ): Promise<LeaderboardEntry[]> {
-    console.log(`📊 Fetching leaderboard from ${this.graphqlUrl}`);
-    console.log(`   Limit: ${limit}, Tournament: ${isTournament}`);
-    console.log(`   Game ID range: ${gameIdRange.startGameId} - ${gameIdRange.endGameId}`);
-
     const expectedMaxGames = gameIdRange.endGameId - gameIdRange.startGameId;
     const maxEntries = expectedMaxGames * 2; // Safety cap: 2x expected games
-    console.log(`   Expected max games: ${expectedMaxGames}`);
+    console.log(
+      `[leaderboard] fetch limit=${limit} tournament=${isTournament} range=${gameIdRange.startGameId}-${gameIdRange.endGameId} expectedMax=${expectedMaxGames} url=${compactUrl(this.graphqlUrl)}`
+    );
 
     try {
       // Paginate through results
@@ -171,7 +173,7 @@ export class LeaderboardService {
         }));
         allRawEntries.push(...pageEntries);
 
-        console.log(`   Page ${page}: fetched ${pageEntries.length} entries (total: ${allRawEntries.length})`);
+        console.log(`[leaderboard] page=${page} fetched=${pageEntries.length} total=${allRawEntries.length}`);
 
         // Safety cap to prevent runaway pagination
         if (allRawEntries.length >= maxEntries) {
@@ -211,7 +213,7 @@ export class LeaderboardService {
         position: index + 1,
       }));
 
-      console.log(`✅ Fetched ${entries.length} leaderboard entries (from ${allRawEntries.length} total games)`);
+      console.log(`[leaderboard] done entries=${entries.length} raw=${allRawEntries.length}`);
 
       return entries;
     } catch (error) {

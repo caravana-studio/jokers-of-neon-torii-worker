@@ -14,12 +14,33 @@ import {
 } from './transactionQueueTypes.js';
 
 const INTENT_QUEUE_TABLE = 'torii_worker_intent_queue';
+const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
+
+interface QueueLogOptions {
+  log?: boolean;
+}
+
+function shouldLogMetadata(metadata: Record<string, unknown> | undefined): boolean {
+  return metadata?.[SUPPRESS_WORKER_LOGS_METADATA_KEY] !== true;
+}
+
+function shouldLogTransaction(transaction: Pick<QueuedIntent, 'metadata'>): boolean {
+  return shouldLogMetadata(transaction.metadata);
+}
+
+function compactHash(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
 
 /**
  * Persistent Transaction Queue Manager
  * Processes transactions sequentially with validation and Supabase persistence
  */
 export class TransactionQueue {
+  private enabled = env.TRANSACTION_QUEUE_ENABLED;
   private processing = false;
   private currentTransactionId: string | null = null;
   private useSupabase: boolean;
@@ -27,11 +48,12 @@ export class TransactionQueue {
 
   constructor() {
     // Check if Supabase is configured
-    this.useSupabase = !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
+    this.useSupabase = this.enabled && !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
 
-    if (!this.useSupabase) {
-      console.warn('⚠️  Supabase not configured - running in memory-only mode');
-      console.warn('⚠️  Transactions will be lost on restart!');
+    if (!this.enabled) {
+      console.warn('[queue] enabled=false');
+    } else if (!this.useSupabase) {
+      console.warn('[queue] storage=memory warning=transactions_lost_on_restart');
     }
   }
 
@@ -39,15 +61,17 @@ export class TransactionQueue {
    * Initialize the queue by recovering pending transactions
    */
   public async initialize(): Promise<void> {
-    if (!this.useSupabase) {
-      console.log('💼 Transaction Queue: Initialized (memory-only mode)');
+    if (!this.enabled) {
+      console.log('[queue] init enabled=false');
       return;
     }
 
-    console.log('💼 Transaction Queue: Initializing with Supabase...');
-    if (this.blockchainFilter) {
-      console.log(`💼 Transaction Queue: filtering blockchains=${this.blockchainFilter.join(',')}`);
+    if (!this.useSupabase) {
+      console.log('[queue] ready storage=memory');
+      return;
     }
+
+    console.log(`[queue] init storage=supabase filter=${this.blockchainFilter?.join(',') ?? 'all'}`);
 
     try {
       // Recover any transactions that were being processed when the worker crashed
@@ -67,12 +91,11 @@ export class TransactionQueue {
 
       if (error) throw error;
 
-      console.log(`💼 Transaction Queue: Initialized with Supabase`);
-      console.log(`   Pending transactions: ${count || 0}`);
+      console.log(`[queue] ready pending=${count || 0}`);
 
       // Start processing if there are pending transactions
       if (count && count > 0) {
-        console.log('🔄 Starting to process pending transactions...');
+        console.log('[queue] processing_pending=true');
         this.processQueue();
       }
     } catch (error) {
@@ -102,7 +125,7 @@ export class TransactionQueue {
       if (error) throw error;
 
       if (data && data.length > 0) {
-        console.log(`🔄 Recovered ${data.length} orphaned transaction(s)`);
+        console.log(`[queue] recovered_orphaned count=${data.length}`);
       }
     } catch (error) {
       console.error('❌ Error recovering orphaned transactions:', error);
@@ -112,15 +135,20 @@ export class TransactionQueue {
   /**
    * Add a transaction to the queue
    */
-  public async enqueue(params: EnqueueTransactionParams): Promise<string> {
+  public async enqueue(params: EnqueueTransactionParams, options: QueueLogOptions = {}): Promise<string> {
+    if (!this.enabled) {
+      throw new Error('Transaction queue is disabled (TRANSACTION_QUEUE_ENABLED=false)');
+    }
+
     const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const maxRetries = params.maxRetries ?? 3;
+    const shouldLog = options.log !== false && shouldLogMetadata(params.metadata);
 
-    console.log(`\n📥 Adding transaction to queue`);
-    console.log(`   ID:         ${id}`);
-    console.log(`   Blockchain: ${params.blockchain}`);
-    console.log(`   Operation:  ${params.operation}`);
-    console.log(`   Target:     ${params.targetRef ?? 'default'}`);
+    if (shouldLog) {
+      console.log(
+        `[queue] enqueue id=${id} chain=${params.blockchain} op=${params.operation} target=${params.targetRef ?? 'default'}`
+      );
+    }
 
     if (this.useSupabase) {
       try {
@@ -148,8 +176,9 @@ export class TransactionQueue {
           .select('*', { count: 'exact', head: true })
           .eq('status', 'pending');
 
-        console.log(`✅ Transaction saved to database`);
-        console.log(`   Queue size: ${count || 0}`);
+        if (shouldLog) {
+          console.log(`[queue] saved id=${id} pending=${count || 0}`);
+        }
       } catch (error) {
         console.error('❌ Error saving transaction to database:', error);
         throw error;
@@ -168,11 +197,16 @@ export class TransactionQueue {
    * Process the queue sequentially
    */
   private async processQueue(): Promise<void> {
+    if (!this.enabled) {
+      return;
+    }
+
     if (this.processing) {
       return;
     }
 
     this.processing = true;
+    let loggedAnyTransaction = false;
 
     while (true) {
       // Get next pending transaction
@@ -184,26 +218,46 @@ export class TransactionQueue {
       }
 
       this.currentTransactionId = transaction.id;
+      const shouldLog = shouldLogTransaction(transaction);
+      loggedAnyTransaction ||= shouldLog;
 
-      console.log(`\n⚙️  Processing transaction from queue`);
-      console.log(`   ID:         ${transaction.id}`);
-      console.log(`   Blockchain: ${transaction.blockchain}`);
-      console.log(`   Operation:  ${transaction.operation}`);
-      console.log(`   Target:     ${transaction.targetRef ?? 'default'}`);
-      console.log(`   Attempt:    ${transaction.retries + 1}/${transaction.maxRetries + 1}`);
+      if (shouldLog) {
+        console.log(
+          `[queue] processing id=${transaction.id} chain=${transaction.blockchain} op=${transaction.operation} target=${transaction.targetRef ?? 'default'} attempt=${transaction.retries + 1}/${transaction.maxRetries + 1}`
+        );
+      }
 
       // Mark as processing
-      await this.updateTransactionStatus(transaction.id, 'processing');
+      await this.updateTransactionStatus(transaction.id, 'processing', undefined, { log: shouldLog });
 
       const result = await this.executeTransaction(transaction);
 
       if (result.success) {
-        console.log(`✅ Transaction executed successfully: ${result.transactionHash}`);
+        if (!result.transactionHash) {
+          const errorMessage = 'Transaction adapter returned success without transactionHash';
+          console.error('[queue] transaction_success_missing_hash:', {
+            id: transaction.id,
+            blockchain: transaction.blockchain,
+            operation: transaction.operation,
+            targetRef: transaction.targetRef,
+            payload: transaction.payload,
+            metadata: transaction.metadata,
+          });
+
+          await this.updateTransactionStatus(transaction.id, 'failed', { errorMessage });
+          this.currentTransactionId = null;
+          await this.sleep(100);
+          continue;
+        }
+
+        if (shouldLog) {
+          console.log(`[queue] completed id=${transaction.id} hash=${compactHash(result.transactionHash)}`);
+        }
 
         // Mark as completed
         await this.updateTransactionStatus(transaction.id, 'completed', {
           transactionHash: result.transactionHash
-        });
+        }, { log: shouldLog });
         await markDailyStreakTransactionCompleted(transaction, result);
 
         this.currentTransactionId = null;
@@ -211,14 +265,27 @@ export class TransactionQueue {
         // Small delay to ensure DB is updated before fetching next transaction
         await this.sleep(100);
       } else {
-        console.error(`❌ Transaction failed:`, result.error?.message);
+        console.error('[queue] transaction_failed:', {
+          id: transaction.id,
+          blockchain: transaction.blockchain,
+          operation: transaction.operation,
+          targetRef: transaction.targetRef,
+          attempt: transaction.retries + 1,
+          maxAttempts: transaction.maxRetries + 1,
+          payload: transaction.payload,
+          metadata: transaction.metadata,
+          error: result.error,
+        });
 
         const newRetries = transaction.retries + 1;
 
         if (newRetries > transaction.maxRetries) {
-          console.error(`🚫 Transaction exceeded max retries (${transaction.maxRetries})`);
-          console.error(`   ID: ${transaction.id}`);
-          console.error(`   Error: ${result.error?.message}`);
+          console.error('[queue] transaction_max_retries_exceeded:', {
+            id: transaction.id,
+            retries: newRetries,
+            maxRetries: transaction.maxRetries,
+            error: result.error,
+          });
 
           // Mark as failed
           await this.updateTransactionStatus(transaction.id, 'failed', {
@@ -231,21 +298,27 @@ export class TransactionQueue {
           // Small delay to ensure DB is updated before fetching next transaction
           await this.sleep(100);
         } else {
-          console.log(`🔄 Will retry transaction (${newRetries}/${transaction.maxRetries})`);
+          if (shouldLog) {
+            console.log(`[queue] retry id=${transaction.id} attempt=${newRetries}/${transaction.maxRetries}`);
+          }
 
           // Update retry count and mark as pending again
           await this.updateTransactionRetries(transaction.id, newRetries);
 
           // Wait before retry (exponential backoff)
           const waitTime = Math.min(1000 * Math.pow(2, newRetries), 30000);
-          console.log(`   Waiting ${waitTime}ms before retry...`);
+          if (shouldLog) {
+            console.log(`[queue] retry_wait id=${transaction.id} waitMs=${waitTime}`);
+          }
           await this.sleep(waitTime);
         }
       }
     }
 
     this.processing = false;
-    console.log(`\n✅ Queue processing completed. No pending transactions.`);
+    if (loggedAnyTransaction) {
+      console.log('[queue] idle pending=0');
+    }
   }
 
   /**
@@ -319,7 +392,8 @@ export class TransactionQueue {
   private async updateTransactionStatus(
     id: string,
     status: TransactionStatus,
-    extra?: { transactionHash?: string; errorMessage?: string }
+    extra?: { transactionHash?: string; errorMessage?: string },
+    options: QueueLogOptions = {}
   ): Promise<void> {
     if (!this.useSupabase) {
       return;
@@ -353,8 +427,6 @@ export class TransactionQueue {
 
       if (!data || data.length === 0) {
         console.warn(`⚠️  No rows updated for transaction ${id}`);
-      } else {
-        console.log(`🔄 Status updated: ${id} -> ${status} (${data.length} row(s))`);
       }
     } catch (error) {
       console.error('❌ Error updating transaction status:', error);

@@ -35,11 +35,7 @@ export const preloadSlotManifest = async (): Promise<void> => {
       }
 
       resolvedSlotManifest = (await response.json()) as Manifest;
-      console.info('[CONFIG-LOG] Slot manifest loaded', {
-        env: configuredEnv,
-        url: manifestUrl,
-        worldAddress: resolvedSlotManifest.world.address,
-      });
+      console.info(`[config] manifest env=${configuredEnv} world=${resolvedSlotManifest.world.address}`);
     })();
   }
 
@@ -67,4 +63,32 @@ export function getWorldAddress(): string {
 
 export function getSlotGameViewsAddress(): string {
   return getContractAddress(getSlotManifest(), 'game_views');
+}
+
+export function getSlotDailyMissionsSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'daily_missions_system');
+}
+
+export function getSlotGameSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'game_system');
+}
+
+export function getSlotPlaySystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'play_system');
+}
+
+export function getSlotShopSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'shop_system');
+}
+
+export function getSlotActionSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'action_system');
+}
+
+export function getSlotMapSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'map_system');
+}
+
+export function getSlotLivesSystemAddress(): string {
+  return getContractAddress(getSlotManifest(), 'lives_system');
 }

@@ -1,8 +1,9 @@
 import { Account, Call, RpcProvider } from 'starknet';
 import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
+import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
 
-let starknetRpcHealthCheckPromise: Promise<void> | null = null;
+const rpcHealthCheckPromises = new Map<string, Promise<void>>();
 
 function getStarknetProvider(): RpcProvider {
   return new RpcProvider({
@@ -14,13 +15,16 @@ function truncateBody(body: string): string {
   return body.length > 240 ? `${body.slice(0, 240)}...` : body;
 }
 
-async function ensureStarknetRpcReachable(): Promise<void> {
-  if (!starknetRpcHealthCheckPromise) {
-    starknetRpcHealthCheckPromise = (async () => {
-      const response = await fetch(env.BACKGROUND_STARKNET_RPC_URL, {
+export async function ensureStarknetRpcReachable(label: string, nodeUrl: string, apiKey = ''): Promise<void> {
+  const cacheKey = `${label}:${nodeUrl}`;
+
+  if (!rpcHealthCheckPromises.has(cacheKey)) {
+    const promise = (async () => {
+      const response = await fetch(nodeUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify({
           jsonrpc: '2.0',
@@ -37,27 +41,29 @@ async function ensureStarknetRpcReachable(): Promise<void> {
         parsed = JSON.parse(body);
       } catch {
         throw new Error(
-          `BACKGROUND_STARKNET_RPC_URL returned a non-JSON response (${response.status}). Check that it points to a Starknet JSON-RPC endpoint. Body: ${truncateBody(body)}`
+          `${label} returned a non-JSON response (${response.status}). Check that it points to a Starknet JSON-RPC endpoint. Body: ${truncateBody(body)}`
         );
       }
 
       const rpcResponse = parsed as { result?: unknown; error?: { code?: number; message?: string } };
       if (rpcResponse.error) {
         throw new Error(
-          `BACKGROUND_STARKNET_RPC_URL rejected starknet_chainId (${rpcResponse.error.code ?? 'unknown'}): ${rpcResponse.error.message ?? 'Unknown RPC error'}`
+          `${label} rejected starknet_chainId (${rpcResponse.error.code ?? 'unknown'}): ${rpcResponse.error.message ?? 'Unknown RPC error'}`
         );
       }
 
       if (!rpcResponse.result) {
-        throw new Error(`BACKGROUND_STARKNET_RPC_URL returned an invalid starknet_chainId response: ${truncateBody(body)}`);
+        throw new Error(`${label} returned an invalid starknet_chainId response: ${truncateBody(body)}`);
       }
-    })().catch(error => {
-      starknetRpcHealthCheckPromise = null;
+    })();
+
+    rpcHealthCheckPromises.set(cacheKey, promise.catch(error => {
+      rpcHealthCheckPromises.delete(cacheKey);
       throw error;
-    });
+    }));
   }
 
-  return starknetRpcHealthCheckPromise;
+  return rpcHealthCheckPromises.get(cacheKey)!;
 }
 
 function getStarknetAccount(): Account {
@@ -69,7 +75,7 @@ function getStarknetAccount(): Account {
 }
 
 function ensureStarknetWriteConfig(): void {
-  const required: Array<keyof typeof env> = ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'STARKNET_PRIVATE_KEY'];
+  const required: Array<keyof typeof env> = ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_PRIVATE_KEY', 'STARKNET_ADDRESS'];
   const missing = required.filter(key => !env[key]);
 
   if (missing.length > 0) {
@@ -77,10 +83,14 @@ function ensureStarknetWriteConfig(): void {
   }
 }
 
+function compactValue(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
-    await ensureStarknetRpcReachable();
+    await ensureStarknetRpcReachable('BACKGROUND_STARKNET_RPC_URL', env.BACKGROUND_STARKNET_RPC_URL);
 
     const call: Call = {
       contractAddress: transaction.contractAddress,
@@ -88,28 +98,27 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
       calldata: transaction.calldata,
     };
 
-    console.log(`\n📤 Executing Starknet transaction...`);
-    console.log(`   Contract:   ${call.contractAddress}`);
-    console.log(`   Entrypoint: ${call.entrypoint}`);
-    console.log(`   Calldata:   ${JSON.stringify(call.calldata)}`);
+    console.log(
+      `[executor] send chain=starknet op=${transaction.entrypoint} account=${compactValue(env.STARKNET_ADDRESS)} contract=${compactValue(call.contractAddress)}`
+    );
 
     const account = getStarknetAccount();
-    const starknetNonce = await account.getNonce();
-    const { transaction_hash } = await account.execute(call, {
-      nonce: starknetNonce,
-      skipValidate: true,
+    const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
+      const starknetNonce = await account.getNonce();
+      const { transaction_hash } = await account.execute(call, {
+        nonce: starknetNonce,
+        skipValidate: true,
+      });
+      return transaction_hash;
     });
 
-    console.log(`✅ Transaction sent: ${transaction_hash}`);
-    console.log('⏳ Waiting for confirmation...');
+    await account.waitForTransaction(transactionHash);
 
-    await account.waitForTransaction(transaction_hash);
-
-    console.log(`✅ Transaction confirmed: ${transaction_hash}\n`);
+    console.log(`[executor] confirmed chain=starknet hash=${compactValue(transactionHash)}`);
 
     return {
       success: true,
-      transactionHash: transaction_hash,
+      transactionHash,
     };
   } catch (error) {
     return {

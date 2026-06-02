@@ -3,6 +3,20 @@ import { env } from './env.js';
 import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
 import { getSlotRpcUrl } from './config/slotConfig.js';
 import { getSlotGameViewsAddress } from './config/manifest.js';
+import { withStarknetWriteLock } from './runtime/StarknetWriteCoordinator.js';
+
+function compactValue(value: unknown): string {
+  const text = String(value);
+  return text.startsWith('0x') && text.length > 18 ? `${text.slice(0, 10)}...${text.slice(-6)}` : text;
+}
+
+function logStarknetLine(scope: string, fields: Record<string, unknown>): void {
+  const details = Object.entries(fields)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}=${compactValue(value)}`)
+    .join(' ');
+  console.log(`[${scope}] ${details}`);
+}
 
 /**
  * RoundData structure for set_round_data
@@ -24,10 +38,12 @@ export async function executeStarknetTransaction(params: {
   entrypoint: string;
   calldata: any[];
 }): Promise<string> {
-  console.log(`\n📤 Ejecutando transacción en Starknet...`);
-  console.log(`   Contract:   ${params.contractAddress}`);
-  console.log(`   Entrypoint: ${params.entrypoint}`);
-  console.log(`   Calldata:   ${JSON.stringify(params.calldata)}`);
+  logStarknetLine('starknet', {
+    action: 'send',
+    entrypoint: params.entrypoint,
+    contract: params.contractAddress,
+    calldataLen: params.calldata.length,
+  });
 
   // Crear provider de Starknet con configuración para usar 'latest' por defecto
   const provider = new RpcProvider({
@@ -48,30 +64,22 @@ export async function executeStarknetTransaction(params: {
     calldata: params.calldata
   };
 
-  console.log("call: ", call);
-
-  console.log(`[${new Date().toISOString()}] Calldata para ${call.entrypoint}:`, {
-    fullCalldata: call.calldata
-  });
-
-  console.log(`[${new Date().toISOString()}] Ejecutando ${call.entrypoint} en Starknet...`);
-
   // Ejecutar transacción usando 'latest' en lugar de 'pending' (Cartridge no soporta pending)
-  const starknetNonce = await account.getNonce();
-  const { transaction_hash } = await account.execute(call, {
-    nonce: starknetNonce,
-    skipValidate: true,
+  const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
+    const starknetNonce = await account.getNonce();
+    const { transaction_hash } = await account.execute(call, {
+      nonce: starknetNonce,
+      skipValidate: true,
+    });
+    return transaction_hash;
   });
-
-  console.log(`✅ Transacción enviada: ${transaction_hash}`);
 
   // Esperar confirmación
-  console.log('⏳ Esperando confirmación...');
-  await account.waitForTransaction(transaction_hash);
+  await account.waitForTransaction(transactionHash);
 
-  console.log(`✅ Transacción confirmada: ${transaction_hash}\n`);
+  logStarknetLine('starknet', { action: 'confirmed', hash: transactionHash });
 
-  return transaction_hash;
+  return transactionHash;
 }
 
 /**
@@ -79,7 +87,7 @@ export async function executeStarknetTransaction(params: {
  * Retorna el Game y Round del juego especificado
  */
 export async function getGameData(gameId: number): Promise<{ game: Game; round: Round }> {
-  console.log(`\n📖 Consultando datos del juego ${gameId}...`);
+  logStarknetLine('slot-view', { action: 'get_game_data', game: gameId });
 
   // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
@@ -96,8 +104,6 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
       },
       'latest'
     );
-
-    console.log(`✅ Datos obtenidos para el juego ${gameId}`);
 
     // Parsear el resultado según la estructura del ABI
     // El resultado es un array de strings (felts) que necesitamos mapear a las estructuras
@@ -149,8 +155,13 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
       rages
     };
 
-    console.log(`   Game Level: ${game.level}, Player Score: ${game.player_score}`);
-    console.log(`   Round: ${round.current_score}/${round.target_score}`);
+    logStarknetLine('slot-view', {
+      action: 'game_data',
+      game: gameId,
+      level: game.level,
+      score: game.player_score,
+      round: `${round.current_score}/${round.target_score}`,
+    });
 
     return { game, round };
   } catch (error) {
@@ -164,7 +175,7 @@ export async function getGameData(gameId: number): Promise<{ game: Game; round: 
  * Retorna un array de effect_card_id (u32[]) extraídos de CurrentSpecialCards
  */
 export async function getGameSpecials(gameId: number): Promise<number[]> {
-  console.log(`\n📖 Consultando specials del juego ${gameId}...`);
+  logStarknetLine('slot-view', { action: 'get_special_cards', game: gameId });
 
   // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
@@ -181,8 +192,6 @@ export async function getGameSpecials(gameId: number): Promise<number[]> {
       },
       'latest'
     );
-
-    console.log(`✅ Special cards obtenidos para el juego ${gameId}`);
 
     // El resultado es un Span<CurrentSpecialCards>
     // Primero viene la longitud del span
@@ -206,8 +215,7 @@ export async function getGameSpecials(gameId: number): Promise<number[]> {
       specials.push(parseInt(effect_card_id));
     }
 
-    console.log(`   Specials count: ${specials.length}`);
-    console.log(`   Effect card IDs: [${specials.join(', ')}]`);
+    logStarknetLine('slot-view', { action: 'special_cards', game: gameId, count: specials.length, effectCards: `[${specials.join(',')}]` });
 
     return specials;
   } catch (error) {
@@ -252,7 +260,7 @@ export function buildGameDataCalldata(game: Game, specials: number[]): any[] {
  * Retorna las PlayerStats del juego especificado
  */
 export async function getPlayerStats(gameId: number): Promise<PlayerStats> {
-  console.log(`\n📖 Consultando estadísticas del jugador para el juego ${gameId}...`);
+  logStarknetLine('slot-view', { action: 'get_player_stats', game: gameId });
 
   // Usar Slot RPC para el contrato GAME_VIEW que está desplegado en Slot
   const provider = new RpcProvider({
@@ -269,8 +277,6 @@ export async function getPlayerStats(gameId: number): Promise<PlayerStats> {
       },
       'latest'
     );
-
-    console.log(`✅ Estadísticas obtenidas para el juego ${gameId}`);
 
     // Parsear el resultado según la estructura de PlayerStats
     let idx = 0;
@@ -301,8 +307,13 @@ export async function getPlayerStats(gameId: number): Promise<PlayerStats> {
       burn_purchased: result[idx++]
     };
 
-    console.log(`   Player: ${playerStats.address}`);
-    console.log(`   Games Played: ${playerStats.games_played}, Games Won: ${playerStats.games_won}`);
+    logStarknetLine('slot-view', {
+      action: 'player_stats',
+      game: gameId,
+      player: playerStats.address,
+      played: playerStats.games_played,
+      won: playerStats.games_won,
+    });
 
     return playerStats;
   } catch (error) {

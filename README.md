@@ -1,3 +1,15 @@
+# Jokers of Neon — Unified Worker
+
+Single long-running process: **Torii event listener**, **transaction intent queue**, **scheduled crons** (daily/weekly mission generation, push notifications, pack distribution), and optional **game agent** burners.
+
+Replaces separate deploys of `jokers-of-neon-torii-worker`, `jokers-of-neon-cron`, and `jokers-of-neon-agent`.
+
+**Entry:** `src/index.ts` → `bun run dev` / `bun run build && bun run start`
+
+**Test before prod:** [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md)
+
+---
+
 # Jokers of Neon - Event Listener
 
 Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
@@ -29,7 +41,7 @@ bun install
 
 ```env
 # Controla qué slot instance y manifest cargar.
-# Valores comunes hoy: dev | prods3
+# Valores comunes hoy: testnet | prods3
 # Slot RPC, Torii URL, Relay URL, World Address y Game View contract
 # se resuelven dinámicamente desde version.json y manifest remoto.
 MANIFEST_SLOT_ENV=dev
@@ -48,11 +60,11 @@ CELO_RPC_URL=https://forno.celo.org
 CELO_PRIVATE_KEY=0x...
 CELO_ADDRESS=0x...
 CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS=0x...
-WORKER_BLOCKCHAIN_FILTER=starknet,celo
+WORKER_BLOCKCHAIN_FILTER=slot,starknet,celo
 ```
 
-`WORKER_BLOCKCHAIN_FILTER` acepta una lista separada por comas, por ejemplo `starknet,celo` o `celo`.
-Filtra qué filas de `torii_worker_transaction_queue` procesa esta instancia del worker. No cambia qué eventos llegan desde Torii; eso ya depende de `MANIFEST_SLOT_ENV`.
+`WORKER_BLOCKCHAIN_FILTER` acepta una lista separada por comas, por ejemplo `slot,starknet,celo`, `starknet,celo` o `celo`.
+Filtra qué filas de `torii_worker_intent_queue` procesa esta instancia del worker. No cambia qué eventos llegan desde Torii; eso ya depende de `MANIFEST_SLOT_ENV`.
 
 ## Uso
 
@@ -71,6 +83,8 @@ bun run build
 # Ejecutar
 bun run start
 ```
+
+El entrypoint compilado es `dist/index.js`; no uses `dist/main.js` en Render.
 
 ## Modos de Operación
 
@@ -122,32 +136,13 @@ Si tienes acceso al proyecto de Cairo/Dojo, puedes generar los schemas TypeScrip
 ## Logs de Ejemplo
 
 ```
-🎮 Jokers of Neon - Event Listener
-════════════════════════════════════════════════════════════
-Torii URL:    https://api.cartridge.gg/x/jokers-pre-season/torii
-Relay URL:    https://api.cartridge.gg/x/jokers-pre-season/torii
-World:        0x...
-════════════════════════════════════════════════════════════
-
-🔌 Inicializando SDK de Dojo...
-
-✅ SDK inicializado correctamente
-
-🚀 Configurando listeners de eventos...
-
-📊 Eventos históricos iniciales: 5
-
-📜 Eventos históricos encontrados:
-   1. Player: 0x123..., Mission: 0x1
-   2. Player: 0x456..., Mission: 0x2
-
-📡 Suscribiéndose a eventos en tiempo real...
-
-✅ Listener configurado exitosamente
-
-👂 Escuchando eventos MissionCompletedEvent...
-
-Presiona Ctrl+C para detener
+[startup] unified_worker slotEnv=testnet torii=true queue=true cron=true notifications=false missions=true packs=false agent=false
+[config] slot env=testnet slot=jokers-testnet-sepolia rpc=https://api.cartridge.gg/x/jokers-testnet-sepolia/katana
+[config] manifest env=testnet world=0x...
+[queue] ready pending=0
+[torii] action=listener_ready events=MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate
+[event] type=current_hand game=1234 cards=[1,2,3,4,5] chain=slot
+[game-step] saved game=1234 step=7
 ```
 
 ## Troubleshooting
@@ -165,3 +160,12 @@ Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el se
 - [Dojo.js Documentation](https://book.dojoengine.org/toolchain/dojo-js)
 - [Example Node Worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker)
 - [Torii Documentation](https://book.dojoengine.org/toolchain/torii)
+
+
+## Unified worker (cron + agent + torii)
+
+Entry point: `src/index.ts` — one process for Torii, queue, crons, notifications, and agent.
+
+See `.env.example` for module flags. Mission generation enqueues `missions.generate_daily` and `missions.generate_weekly` to the `slot` adapter, which uses the Slot/Katana RPC resolved from `MANIFEST_SLOT_ENV`. Starknet public writes for profile/progression/NFT remain on the `starknet` adapter.
+
+Test on staging (`MANIFEST_SLOT_ENV` for test slot) before prod cutover.
