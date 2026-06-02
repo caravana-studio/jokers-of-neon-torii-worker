@@ -95,8 +95,50 @@ export const env = {
 
 };
 
+function describeRpcEndpoint(rawUrl: string): string {
+  if (!rawUrl) {
+    return 'missing';
+  }
+
+  try {
+    const url = new URL(rawUrl);
+    const path = url.pathname
+      .split('/')
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('/');
+
+    return path ? `${url.hostname}/${path}` : url.hostname;
+  } catch {
+    return rawUrl.length > 40 ? `${rawUrl.slice(0, 24)}...` : rawUrl;
+  }
+}
+
+function logBackgroundRpcSelection(): void {
+  const configuredBackgroundRpc = process.env.BACKGROUND_STARKNET_RPC_URL?.trim() || '';
+  const configuredDefaultRpc = process.env.STARKNET_RPC_URL?.trim() || '';
+  const source = configuredBackgroundRpc
+    ? 'BACKGROUND_STARKNET_RPC_URL'
+    : configuredDefaultRpc
+      ? 'STARKNET_RPC_URL'
+      : 'none';
+  const mode = !env.BACKGROUND_STARKNET_RPC_URL
+    ? 'missing'
+    : configuredBackgroundRpc
+      ? configuredBackgroundRpc === configuredDefaultRpc
+        ? 'background-same-as-default'
+        : 'dedicated-background'
+      : 'default-fallback';
+
+  console.log(
+    `[env] starknet_rpc role=background mode=${mode} source=${source} endpoint=${describeRpcEndpoint(env.BACKGROUND_STARKNET_RPC_URL)}`
+  );
+}
+
 // Validar configuración requerida
 function validateConfig() {
+  logBackgroundRpcSelection();
+
   // Advertir si no está en modo solo lectura pero faltan configuraciones de Starknet
   if (!env.READONLY_MODE) {
     const starknetRequired = ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_PRIVATE_KEY', 'STARKNET_ADDRESS', 'XP_SYSTEM_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS'];
