@@ -8,6 +8,16 @@ const NOTIFICATION_HOUR = env.DAILY_MISSIONS_NOTIFICATION_HOUR;
 
 const DEBUG_WALLET = env.NOTIFICATIONS_DEBUG_WALLET;
 
+function compactWallet(wallet: string): string {
+    return wallet.startsWith('0x') && wallet.length > 18 ? `${wallet.slice(0, 10)}...${wallet.slice(-6)}` : wallet;
+}
+
+function compactText(value: string | null, maxLength = 240): string {
+    if (!value) return '';
+    const compact = value.replace(/\s+/g, ' ');
+    return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
 function normalizeWallet(wallet: string): string {
     if (!wallet) return '';
     const lower = wallet.toLowerCase().trim();
@@ -57,18 +67,20 @@ function getLocalizedMessage(language: string, pendingCount: number, hoursRemain
 
 async function sendMissionsReminder(): Promise<void> {
     try {
-        console.log('[MissionsReminder] Ejecutando...');
-
         const devices = await getEnabledDevices();
         const apiUrl = `${resolveDataApiBaseUrl()}/api/daily-missions`;
         let notifiedCount = 0;
+        console.log(`[missions-reminder] start devices=${devices.length} hour=${NOTIFICATION_HOUR}`);
 
         if (DEBUG_WALLET) {
             const debugDevices = devices.filter(d => isDebugWallet(d.wallet));
-            console.log(`[MissionsReminder][DEBUG] DEBUG_WALLET=${DEBUG_WALLET}`);
-            console.log(`[MissionsReminder][DEBUG] total devices=${devices.length}, matching debug=${debugDevices.length}`);
+            console.log(
+                `[missions-reminder] debugWallet=${compactWallet(DEBUG_WALLET)} devices=${devices.length} matches=${debugDevices.length}`
+            );
             debugDevices.forEach((d, i) => {
-                console.log(`[MissionsReminder][DEBUG] match[${i}] wallet=${d.wallet} fcm_token=${d.fcm_token?.slice(0, 12)}...`);
+                console.log(
+                    `[missions-reminder-debug] match=${i} wallet=${compactWallet(d.wallet)} token=${d.fcm_token?.slice(0, 12)}...`
+                );
             });
         }
 
@@ -82,29 +94,33 @@ async function sendMissionsReminder(): Promise<void> {
                     .single();
 
                 if (debug) {
-                    console.log(`[MissionsReminder][DEBUG] supabase user_preferences for ${device.wallet}:`, { userError, userPrefs });
+                    console.log(
+                        `[missions-reminder-debug] prefs wallet=${compactWallet(device.wallet)} error=${userError?.message ?? 'none'} found=${Boolean(userPrefs)} timezone=${userPrefs?.timezone ?? 'unknown'} language=${userPrefs?.language ?? 'unknown'}`
+                    );
                 }
 
                 if (userError || !userPrefs) {
-                    if (debug) console.log(`[MissionsReminder][DEBUG] SKIP: no userPrefs (${userError?.message ?? 'null'})`);
+                    if (debug) console.log(`[missions-reminder-debug] skip wallet=${compactWallet(device.wallet)} reason=no_prefs`);
                     continue;
                 }
                 if (!userPrefs.push_reminders_enabled) {
-                    if (debug) console.log(`[MissionsReminder][DEBUG] SKIP: push_reminders_enabled=false`);
+                    if (debug) console.log(`[missions-reminder-debug] skip wallet=${compactWallet(device.wallet)} reason=disabled`);
                     continue;
                 }
 
                 const currentHour = getCurrentHourInTimezone(userPrefs.timezone);
                 if (debug) {
-                    console.log(`[MissionsReminder][DEBUG] timezone=${userPrefs.timezone} currentHour=${currentHour} NOTIFICATION_HOUR=${NOTIFICATION_HOUR}`);
+                    console.log(
+                        `[missions-reminder-debug] hour wallet=${compactWallet(device.wallet)} timezone=${userPrefs.timezone} current=${currentHour} target=${NOTIFICATION_HOUR}`
+                    );
                 }
                 if (currentHour !== NOTIFICATION_HOUR) {
-                    if (debug) console.log(`[MissionsReminder][DEBUG] SKIP: hour mismatch`);
+                    if (debug) console.log(`[missions-reminder-debug] skip wallet=${compactWallet(device.wallet)} reason=hour_mismatch`);
                     continue;
                 }
 
                 const fullUrl = `${apiUrl}?player=${device.wallet}`;
-                if (debug) console.log(`[MissionsReminder][DEBUG] fetching ${fullUrl}`);
+                if (debug) console.log(`[missions-reminder-debug] fetch wallet=${compactWallet(device.wallet)} url=${fullUrl}`);
                 const response = await fetch(fullUrl);
                 const rawText = debug ? await response.text() : null;
                 const missionsData: DailyMissionsResponse = debug
@@ -112,10 +128,13 @@ async function sendMissionsReminder(): Promise<void> {
                     : ((await response.json()) as DailyMissionsResponse);
 
                 if (debug) {
-                    console.log(`[MissionsReminder][DEBUG] api status=${response.status} raw=${rawText}`);
-                    console.log(`[MissionsReminder][DEBUG] missions.length=${missionsData.missions?.length}`);
+                    console.log(
+                        `[missions-reminder-debug] api wallet=${compactWallet(device.wallet)} status=${response.status} missions=${missionsData.missions?.length ?? 0} raw=${compactText(rawText)}`
+                    );
                     missionsData.missions?.forEach((m, i) => {
-                        console.log(`[MissionsReminder][DEBUG]   [${i}] day=${m?.day} mission_id=${m?.mission_id} completed=${m?.completed} (typeof=${typeof m?.completed})`);
+                        console.log(
+                            `[missions-reminder-debug] mission wallet=${compactWallet(device.wallet)} index=${i} day=${m?.day} mission=${m?.mission_id} completed=${m?.completed} completedType=${typeof m?.completed}`
+                        );
                     });
                 }
 
@@ -123,11 +142,13 @@ async function sendMissionsReminder(): Promise<void> {
                 const allCompleted = completed.every(c => c);
 
                 if (debug) {
-                    console.log(`[MissionsReminder][DEBUG] completed array=${JSON.stringify(completed)} allCompleted=${allCompleted}`);
+                    console.log(
+                        `[missions-reminder-debug] completion wallet=${compactWallet(device.wallet)} completed=${JSON.stringify(completed)} allCompleted=${allCompleted}`
+                    );
                 }
 
                 if (allCompleted) {
-                    if (debug) console.log(`[MissionsReminder][DEBUG] SKIP: allCompleted`);
+                    if (debug) console.log(`[missions-reminder-debug] skip wallet=${compactWallet(device.wallet)} reason=all_completed`);
                     continue;
                 }
 
@@ -136,17 +157,18 @@ async function sendMissionsReminder(): Promise<void> {
                 const { title, body } = getLocalizedMessage(userPrefs.language, pendingCount, hoursRemaining);
 
                 if (debug) {
-                    console.log(`[MissionsReminder][DEBUG] pendingCount=${pendingCount} hoursRemaining=${hoursRemaining} language=${userPrefs.language}`);
-                    console.log(`[MissionsReminder][DEBUG] title="${title}" body="${body}"`);
+                    console.log(
+                        `[missions-reminder-debug] message wallet=${compactWallet(device.wallet)} pending=${pendingCount} hoursRemaining=${hoursRemaining} language=${userPrefs.language} title=${JSON.stringify(title)} body=${JSON.stringify(body)}`
+                    );
                 }
 
                 const sent = await sendPushNotification(device.fcm_token, title, body);
 
-                if (debug) console.log(`[MissionsReminder][DEBUG] sendPushNotification returned ${sent}`);
+                if (debug) console.log(`[missions-reminder-debug] send_result wallet=${compactWallet(device.wallet)} sent=${sent}`);
 
                 if (sent) {
                     notifiedCount++;
-                    console.log(`[MissionsReminder] Enviado a ${device.wallet} (${userPrefs.language})`);
+                    console.log(`[missions-reminder] sent wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`);
                 }
             } catch (fetchError) {
                 console.error(`[MissionsReminder] Error processing ${device.wallet}:`, fetchError);
@@ -154,7 +176,7 @@ async function sendMissionsReminder(): Promise<void> {
             }
         }
 
-        console.log(`[MissionsReminder] ${notifiedCount} usuarios notificados`);
+        console.log(`[missions-reminder] done notified=${notifiedCount}`);
     } catch (error) {
         console.error('[MissionsReminder] Error:', error);
     }

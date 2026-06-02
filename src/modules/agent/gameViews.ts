@@ -15,7 +15,7 @@ export const preloadGameViewsData = async (): Promise<void> => {
   });
 
   cachedCurrentSeasonId = Number(BigInt(seasonResult[0]));
-  console.info('[CONFIG-LOG] Game views data loaded', { currentSeasonId: cachedCurrentSeasonId });
+  console.info(`[config] game_views currentSeasonId=${cachedCurrentSeasonId}`);
 };
 
 export const getCurrentSeasonIdValue = (): number => {

@@ -410,6 +410,10 @@ function parsePlayerStatsCalldata(calldata: unknown[]): ParsedPlayerStats {
   };
 }
 
+function compactValue(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
 export async function executeCeloQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     const missing = getMissingCeloConfig();
@@ -418,10 +422,9 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
       throw new Error(`Missing Celo write configuration: ${missing.join(', ')}`);
     }
 
-    console.log(`\n📤 Executing Celo transaction...`);
-    console.log(`   Contract:   ${transaction.contractAddress}`);
-    console.log(`   Entrypoint: ${transaction.entrypoint}`);
-    console.log(`   Calldata:   ${JSON.stringify(transaction.calldata)}`);
+    console.log(
+      `[executor] send chain=celo op=${transaction.entrypoint} contract=${compactValue(transaction.contractAddress)}`
+    );
 
     const account = getCeloAccount();
     const publicClient = createPublicClient({
@@ -492,12 +495,9 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
       data,
     });
 
-    console.log(`✅ Transaction sent: ${hash}`);
-    console.log('⏳ Waiting for confirmation...');
-
     await publicClient.waitForTransactionReceipt({ hash });
 
-    console.log(`✅ Transaction confirmed: ${hash}\n`);
+    console.log(`[executor] confirmed chain=celo hash=${compactValue(hash)}`);
 
     return {
       success: true,

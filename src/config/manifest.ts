@@ -35,11 +35,7 @@ export const preloadSlotManifest = async (): Promise<void> => {
       }
 
       resolvedSlotManifest = (await response.json()) as Manifest;
-      console.info('[CONFIG-LOG] Slot manifest loaded', {
-        env: configuredEnv,
-        url: manifestUrl,
-        worldAddress: resolvedSlotManifest.world.address,
-      });
+      console.info(`[config] manifest env=${configuredEnv} world=${resolvedSlotManifest.world.address}`);
     })();
   }
 

@@ -103,8 +103,7 @@ function validateConfig() {
     const starknetMissing = starknetRequired.filter(key => !env[key as keyof typeof env]);
 
     if (starknetMissing.length > 0) {
-      console.warn(`⚠️  Configuración de Starknet incompleta: ${starknetMissing.join(', ')}`);
-      console.warn('⚠️  El bot funcionará en modo solo lectura');
+      console.warn(`[env] starknet_write=disabled missing=${starknetMissing.join(',')}`);
     }
   }
 
@@ -113,18 +112,18 @@ function validateConfig() {
     const celoMissing = celoRequired.filter(key => !env[key as keyof typeof env]);
 
     if (celoMissing.length > 0) {
-      console.warn(`⚠️  Configuración de Celo incompleta: ${celoMissing.join(', ')}`);
+      console.warn(`[env] celo_write=disabled missing=${celoMissing.join(',')}`);
     }
 
     if (!env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS) {
-      console.warn('⚠️  No hay contrato Celo configurado: define CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS');
+      console.warn('[env] celo_profile_system=missing');
     }
   }
 
   if (env.MISSIONS_GENERATION_ENABLED) {
     const slotMissing = ['SLOT_MASTER_ADDRESS', 'SLOT_MASTER_PRIVATE_KEY'].filter(key => !env[key as keyof typeof env]);
     if (slotMissing.length > 0) {
-      console.warn(`⚠️  Configuración de Slot incompleta para misiones: ${slotMissing.join(', ')}`);
+      console.warn(`[env] slot_missions_write=disabled missing=${slotMissing.join(',')}`);
     }
   }
 }

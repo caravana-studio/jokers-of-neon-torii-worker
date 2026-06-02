@@ -11,6 +11,10 @@ const MAX_STEPS_PER_GAME = 200;
 
 let scheduler: JobScheduler | null = null;
 
+function compactValue(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
 async function runAgentCycle(): Promise<void> {
   const burners = getBurnerAccounts();
   if (burners.length === 0) {
@@ -18,7 +22,7 @@ async function runAgentCycle(): Promise<void> {
     return;
   }
 
-  console.log(`[agent] ${burners.length} burner(s), ${GAMES_PER_ACCOUNT} games each`);
+  console.log(`[agent] cycle_start burners=${burners.length} gamesPerAccount=${GAMES_PER_ACCOUNT}`);
   const provider = getProvider();
   const seasonId = getCurrentSeasonIdValue();
 
@@ -26,20 +30,17 @@ async function runAgentCycle(): Promise<void> {
     const burner = burners[accountIndex];
     const account = createAccountFromBurner(burner, provider);
 
-    console.log(`\n${'='.repeat(60)}`);
-    console.log(`[agent] Account ${accountIndex + 1}/${burners.length} ${burner.address.slice(0, 10)}...`);
+    console.log(`[agent] account index=${accountIndex + 1}/${burners.length} address=${compactValue(burner.address)}`);
 
     try {
       const claimTxHash = await claim(seasonId, account);
-      console.log(`[agent] Lives claimed season ${seasonId}: ${claimTxHash}`);
       await provider.waitForTransaction(claimTxHash);
-      console.log(`[agent] Lives claim confirmed: ${claimTxHash}`);
+      console.log(`[agent] lives_claimed season=${seasonId} hash=${compactValue(claimTxHash)}`);
     } catch (error) {
-      console.log(`[agent] Lives claim skipped: ${error instanceof Error ? error.message : error}`);
+      console.log(`[agent] lives_claim_skipped reason=${error instanceof Error ? error.message : error}`);
     }
 
     for (let gameNum = 0; gameNum < GAMES_PER_ACCOUNT; gameNum++) {
-      console.log(`\n[agent] Game ${gameNum + 1}/${GAMES_PER_ACCOUNT}`);
       try {
         const { gameId } = await newGame(
           account.address,
@@ -49,17 +50,16 @@ async function runAgentCycle(): Promise<void> {
           false,
           account
         );
-        console.log(`[agent] Created game ${gameId}`);
         const results = await runAgent(gameId, MAX_STEPS_PER_GAME, account);
-        console.log(`[agent] Finished in ${results.length} steps`);
+        console.log(`[agent] game_done account=${accountIndex + 1}/${burners.length} game=${gameId} steps=${results.length}`);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         if (errorMsg.includes("don't have any lives") || errorMsg.includes('LivesSystem')) {
-          console.log('[agent] No lives, next account');
+          console.log(`[agent] account_done reason=no_lives account=${accountIndex + 1}/${burners.length}`);
           break;
         }
         if (errorMsg.includes('execution_error') || errorMsg.includes('Transaction execution')) {
-          console.log(`[agent] Tx failed, next account: ${errorMsg}`);
+          console.log(`[agent] account_done reason=tx_failed account=${accountIndex + 1}/${burners.length} error=${errorMsg}`);
           break;
         }
         console.error(`[agent] Error: ${errorMsg}`);
@@ -67,7 +67,7 @@ async function runAgentCycle(): Promise<void> {
     }
   }
 
-  console.log(`[agent] Cycle done. Next in ${env.INTERVAL_HOURS}h`);
+  console.log(`[agent] cycle_done nextHours=${env.INTERVAL_HOURS}`);
 }
 
 export async function startGameAgentModule(): Promise<void> {

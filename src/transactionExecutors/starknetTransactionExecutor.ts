@@ -86,6 +86,10 @@ function ensureStarknetWriteConfig(): void {
   }
 }
 
+function compactValue(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
@@ -97,10 +101,9 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
       calldata: transaction.calldata,
     };
 
-    console.log(`\n📤 Executing Starknet transaction...`);
-    console.log(`   Contract:   ${call.contractAddress}`);
-    console.log(`   Entrypoint: ${call.entrypoint}`);
-    console.log(`   Calldata:   ${JSON.stringify(call.calldata)}`);
+    console.log(
+      `[executor] send chain=starknet op=${transaction.entrypoint} account=${compactValue(env.STARKNET_ADDRESS)} contract=${compactValue(call.contractAddress)}`
+    );
 
     const account = getStarknetAccount();
     const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
@@ -112,12 +115,9 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
       return transaction_hash;
     });
 
-    console.log(`✅ Transaction sent: ${transactionHash}`);
-    console.log('⏳ Waiting for confirmation...');
-
     await account.waitForTransaction(transactionHash);
 
-    console.log(`✅ Transaction confirmed: ${transactionHash}\n`);
+    console.log(`[executor] confirmed chain=starknet hash=${compactValue(transactionHash)}`);
 
     return {
       success: true,

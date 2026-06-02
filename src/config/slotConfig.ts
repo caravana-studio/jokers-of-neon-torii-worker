@@ -44,13 +44,9 @@ export const preloadSlotConfig = async (): Promise<void> => {
         slotToriiUrl = `${getBaseUrl(resolvedSlot)}/torii`;
         slotRelayUrl = `/dns4/api.cartridge.gg/tcp/443/x-parity-wss/%2Fx%2F${resolvedSlot}%2Ftorii%2Fwss`;
 
-        console.info('[CONFIG-LOG] Slot config loaded from version.json', {
-          env: configuredEnv,
-          slotInstance,
-          rpcUrl: slotRpcUrl,
-          toriiUrl: slotToriiUrl,
-          relayUrl: slotRelayUrl,
-        });
+        console.info(
+          `[config] slot env=${configuredEnv} slot=${slotInstance} rpc=${slotRpcUrl} torii=${slotToriiUrl}`
+        );
       } catch (error) {
         clearTimeout(timeoutId);
         throw new Error(`[slot-config] Failed to load slot config: ${error}`);

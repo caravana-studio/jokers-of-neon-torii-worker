@@ -35,6 +35,10 @@ function withSlotNoFeeExecuteOptions(options: UniversalDetails = {}): UniversalD
   };
 }
 
+function compactValue(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
 export async function executeSlotQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureSlotWriteConfig();
@@ -49,14 +53,9 @@ export async function executeSlotQueueTransaction(transaction: QueuedTransaction
       calldata: transaction.calldata,
     };
 
-    console.log(`\n📤 Executing Slot transaction...`);
-    console.log(`   Slot:       ${slotInstance}`);
-    console.log(`   RPC:        ${slotRpcUrl}`);
-    console.log(`   Account:    ${env.SLOT_MASTER_ADDRESS}`);
-    console.log(`   Operation:  ${transaction.blockchain}.${transaction.entrypoint}`);
-    console.log(`   Contract:   ${call.contractAddress}`);
-    console.log(`   Entrypoint: ${call.entrypoint}`);
-    console.log(`   Calldata:   ${JSON.stringify(call.calldata)}`);
+    console.log(
+      `[executor] send chain=slot slot=${slotInstance} op=${transaction.blockchain}.${transaction.entrypoint} account=${compactValue(env.SLOT_MASTER_ADDRESS)} contract=${compactValue(call.contractAddress)}`
+    );
 
     const account = getSlotAccount();
     const transactionHash = await withStarknetWriteLock(`slot:${env.SLOT_MASTER_ADDRESS}`, async () => {
@@ -71,12 +70,9 @@ export async function executeSlotQueueTransaction(transaction: QueuedTransaction
       return transaction_hash;
     });
 
-    console.log(`✅ Slot transaction sent: ${transactionHash}`);
-    console.log('⏳ Waiting for confirmation...');
-
     await account.waitForTransaction(transactionHash);
 
-    console.log(`✅ Slot transaction confirmed: ${transactionHash}\n`);
+    console.log(`[executor] confirmed chain=slot hash=${compactValue(transactionHash)}`);
 
     return {
       success: true,

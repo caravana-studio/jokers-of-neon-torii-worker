@@ -13,6 +13,10 @@ import {
 
 const NOTIFICATION_TYPE = 'free_packs';
 
+function compactWallet(wallet: string): string {
+    return wallet.startsWith('0x') && wallet.length > 18 ? `${wallet.slice(0, 10)}...${wallet.slice(-6)}` : wallet;
+}
+
 function getLocalizedMessage(language: string): NotificationMessage {
     const messages: Record<string, NotificationMessage> = {
         es: {
@@ -34,10 +38,8 @@ function getLocalizedMessage(language: string): NotificationMessage {
 
 async function sendFreePacksNotifications(): Promise<void> {
     try {
-        console.log('[FreePacks] Ejecutando...');
-
         const devices = await getEnabledDevices();
-        console.log(`[FreePacks] Dispositivos habilitados: ${devices.length}`);
+        console.log(`[free-packs] start devices=${devices.length}`);
 
         const apiUrl = `${resolveDataApiBaseUrl()}/api/next-free-pack-timestamp`;
         let notifiedCount = 0;
@@ -78,7 +80,6 @@ async function sendFreePacksNotifications(): Promise<void> {
 
                 // Si no hay timestamp válido, no hay pack disponible
                 if (packTimestamp == null || packTimestamp === 0) {
-                    console.log(`[FreePacks] ${device.wallet}: API devolvió timestamp inválido: ${packTimestamp}`);
                     skippedNoPackAvailable++;
                     continue;
                 }
@@ -91,12 +92,9 @@ async function sendFreePacksNotifications(): Promise<void> {
                     continue;
                 }
 
-                console.log(`[FreePacks] ${device.wallet}: Pack disponible (timestamp: ${packTimestamp})`);
-
                 const referenceId = packTimestamp.toString();
                 const alreadySent = await hasNotificationBeenSent(device.wallet, NOTIFICATION_TYPE, referenceId);
                 if (alreadySent) {
-                    console.log(`[FreePacks] ${device.wallet}: Ya notificado para este pack`);
                     skippedAlreadySent++;
                     continue;
                 }
@@ -107,20 +105,16 @@ async function sendFreePacksNotifications(): Promise<void> {
                 if (sent) {
                     await logNotificationSent(device.wallet, NOTIFICATION_TYPE, referenceId);
                     notifiedCount++;
-                    console.log(`[FreePacks] Enviado a ${device.wallet} (${userPrefs.language})`);
+                    console.log(`[free-packs] sent wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`);
                 }
             } catch (fetchError) {
                 console.error(`[FreePacks] Error processing ${device.wallet}:`, fetchError);
             }
         }
 
-        console.log(`[FreePacks] Resumen:`);
-        console.log(`  - Sin preferencias: ${skippedNoPrefs}`);
-        console.log(`  - Notif deshabilitadas: ${skippedDisabled}`);
-        console.log(`  - Fuera de horario: ${skippedHours}`);
-        console.log(`  - Sin pack disponible: ${skippedNoPackAvailable}`);
-        console.log(`  - Ya notificados: ${skippedAlreadySent}`);
-        console.log(`  - Notificados: ${notifiedCount}`);
+        console.log(
+            `[free-packs] done notified=${notifiedCount} noPrefs=${skippedNoPrefs} disabled=${skippedDisabled} outsideHours=${skippedHours} noPack=${skippedNoPackAvailable} alreadySent=${skippedAlreadySent}`
+        );
     } catch (error) {
         console.error('[FreePacks] Error:', error);
     }

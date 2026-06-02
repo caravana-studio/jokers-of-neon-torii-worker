@@ -12,7 +12,7 @@ function handleShutdown(signal: NodeJS.Signals): void {
     return;
   }
   shuttingDown = true;
-  console.log(`\n⏹️  Shutting down (${signal})...`);
+  console.log(`[shutdown] signal=${signal}`);
   void shutdown().finally(() => process.exit(0));
 }
 

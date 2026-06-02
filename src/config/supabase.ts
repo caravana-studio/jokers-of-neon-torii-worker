@@ -18,11 +18,9 @@ export function getSupabase(): SupabaseClient {
 }
 
 if (!isSupabaseConfigured()) {
-  console.warn('⚠️  Supabase configuration incomplete');
-  if (env.TRANSACTION_QUEUE_ENABLED) {
-    console.warn('⚠️  Transaction queue will work in memory-only mode');
-  }
-  console.log('Required variables: SUPABASE_URL, SUPABASE_ANON_KEY');
+  console.warn(
+    `[supabase] configured=false queueMemoryOnly=${env.TRANSACTION_QUEUE_ENABLED} required=SUPABASE_URL,SUPABASE_ANON_KEY`
+  );
 }
 
 /** @deprecated Prefer getSupabase() — lazy; only valid when configured */

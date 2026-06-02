@@ -13,16 +13,11 @@ let scheduler: JobScheduler | null = null;
 let stopTorii: (() => void) | null = null;
 
 export async function bootstrap(): Promise<void> {
-  console.log('🚀 Jokers of Neon — Unified Worker');
-  console.log('═'.repeat(60));
-  console.log(`Slot Env: ${env.MANIFEST_SLOT_ENV}`);
-  console.log(`Torii: ${env.TORII_LISTENER_ENABLED} | Queue: ${env.TRANSACTION_QUEUE_ENABLED}`);
-  console.log(`Cron: ${env.CRON_JOBS_ENABLED} | Notifications: ${env.NOTIFICATIONS_ENABLED}`);
-  console.log(`Missions: ${env.MISSIONS_GENERATION_ENABLED} | Packs: ${env.PACK_DISTRIBUTION_ENABLED}`);
-  console.log(`Agent: ${env.GAME_AGENT_ENABLED}`);
-  console.log('═'.repeat(60));
+  console.log(
+    `[startup] unified_worker slotEnv=${env.MANIFEST_SLOT_ENV} torii=${env.TORII_LISTENER_ENABLED} queue=${env.TRANSACTION_QUEUE_ENABLED} cron=${env.CRON_JOBS_ENABLED} notifications=${env.NOTIFICATIONS_ENABLED} missions=${env.MISSIONS_GENERATION_ENABLED} packs=${env.PACK_DISTRIBUTION_ENABLED} agent=${env.GAME_AGENT_ENABLED}`
+  );
 
-  console.log('\n🔌 Loading remote Slot config and manifest...');
+  console.log('[startup] loading_remote_config=slot+manifest');
   await preloadSlotConfig();
   await preloadSlotManifest();
 
@@ -33,7 +28,7 @@ export async function bootstrap(): Promise<void> {
   if (env.TRANSACTION_QUEUE_ENABLED) {
     await getTransactionQueue().initialize();
   } else {
-    console.log('ℹ️  Transaction queue disabled (TRANSACTION_QUEUE_ENABLED=false)');
+    console.log('[startup] queue=disabled');
   }
 
   scheduler = new JobScheduler();
@@ -41,8 +36,7 @@ export async function bootstrap(): Promise<void> {
   if (env.TORII_LISTENER_ENABLED) {
     stopTorii = await startToriiWorker();
   } else {
-    console.log('ℹ️  Torii listener disabled (TORII_LISTENER_ENABLED=false)');
-    console.log('👂 Process staying alive for scheduled jobs...\n');
+    console.log('[startup] torii=disabled stay_alive=true');
   }
 
   scheduler.registerCronJobs([

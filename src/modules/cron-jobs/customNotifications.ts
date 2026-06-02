@@ -26,13 +26,17 @@ interface CustomNotification {
     timing_mode?: TimingMode;
 }
 
+function compactWallet(wallet: string): string {
+    return wallet.startsWith('0x') && wallet.length > 18 ? `${wallet.slice(0, 10)}...${wallet.slice(-6)}` : wallet;
+}
+
 function getLocalizedMessage(messages: Record<string, LocalizedMessage>, language: string): LocalizedMessage {
     return messages[language] || messages['en'] || Object.values(messages)[0] || { title: '', body: '' };
 }
 
 async function sendCustomNotifications(): Promise<void> {
     try {
-        console.log('[CustomNotifications] Ejecutando...');
+        console.log('[custom-notifications] start');
 
         const { data: notifications, error: notifError } = await supabase
             .from('custom_notifications')
@@ -42,11 +46,9 @@ async function sendCustomNotifications(): Promise<void> {
         if (notifError) throw notifError;
 
         if (!notifications || notifications.length === 0) {
-            console.log('[CustomNotifications] No hay notificaciones activas');
+            console.log('[custom-notifications] done active=0 sent=0');
             return;
         }
-
-        console.log(`[CustomNotifications] ${notifications.length} notificaciones activas`);
 
         // Pre-calculate Argentina time once
         const argentinaHour = getCurrentHourInTimezone(ARGENTINA_TIMEZONE);
@@ -61,9 +63,10 @@ async function sendCustomNotifications(): Promise<void> {
         });
         const localNotifications = allNotifications.filter(n => n.timing_mode !== 'global');
 
-        console.log(`[CustomNotifications] ${globalNotifications.length} global, ${localNotifications.length} local`);
-
         const devices = await getEnabledDevices();
+        console.log(
+            `[custom-notifications] active=${notifications.length} global=${globalNotifications.length} local=${localNotifications.length} devices=${devices.length}`
+        );
         let notifiedCount = 0;
 
         // Process global notifications (send to all users who have the preference enabled)
@@ -86,7 +89,9 @@ async function sendCustomNotifications(): Promise<void> {
 
                     if (sent) {
                         notifiedCount++;
-                        console.log(`[CustomNotifications] [global] Enviado a ${device.wallet}: ${title}`);
+                        console.log(
+                            `[custom-notifications] sent mode=global notification=${notification.id} wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`
+                        );
                     }
                 } catch (fetchError) {
                     console.error(`[CustomNotifications] Error processing ${device.wallet}:`, fetchError);
@@ -122,7 +127,9 @@ async function sendCustomNotifications(): Promise<void> {
 
                     if (sent) {
                         notifiedCount++;
-                        console.log(`[CustomNotifications] [local] Enviado a ${device.wallet}: ${title}`);
+                        console.log(
+                            `[custom-notifications] sent mode=local notification=${notification.id} wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`
+                        );
                     }
                 } catch (fetchError) {
                     console.error(`[CustomNotifications] Error processing ${device.wallet}:`, fetchError);
@@ -130,7 +137,7 @@ async function sendCustomNotifications(): Promise<void> {
             }
         }
 
-        console.log(`[CustomNotifications] ${notifiedCount} notificaciones enviadas`);
+        console.log(`[custom-notifications] done sent=${notifiedCount}`);
     } catch (error) {
         console.error('[CustomNotifications] Error:', error);
     }

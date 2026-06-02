@@ -9,7 +9,7 @@ export async function enqueueGenerateDailyMissions(): Promise<void> {
     !env.SLOT_MASTER_ADDRESS ||
     !env.SLOT_MASTER_PRIVATE_KEY
   ) {
-    console.log('[GenerateDailyMissions] skipped (disabled, queue disabled, Slot filtered out, or missing Slot write config)');
+    console.log('[missions] generate_daily=skipped reason=disabled_or_unconfigured');
     return;
   }
 
@@ -20,7 +20,7 @@ export async function enqueueGenerateDailyMissions(): Promise<void> {
     payload: {},
     metadata: { source: 'cron' },
   });
-  console.log('[GenerateDailyMissions] intent enqueued');
+  console.log('[missions] generate_daily=enqueued');
 }
 
 export async function enqueueGenerateWeeklyMissions(): Promise<void> {
@@ -31,7 +31,7 @@ export async function enqueueGenerateWeeklyMissions(): Promise<void> {
     !env.SLOT_MASTER_ADDRESS ||
     !env.SLOT_MASTER_PRIVATE_KEY
   ) {
-    console.log('[GenerateWeeklyMissions] skipped (disabled, queue disabled, Slot filtered out, or missing Slot write config)');
+    console.log('[missions] generate_weekly=skipped reason=disabled_or_unconfigured');
     return;
   }
 
@@ -42,5 +42,5 @@ export async function enqueueGenerateWeeklyMissions(): Promise<void> {
     payload: {},
     metadata: { source: 'cron' },
   });
-  console.log('[GenerateWeeklyMissions] intent enqueued');
+  console.log('[missions] generate_weekly=enqueued');
 }
