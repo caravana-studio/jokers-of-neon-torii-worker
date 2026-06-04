@@ -7,10 +7,7 @@ const rpcHealthCheckPromises = new Map<string, Promise<void>>();
 
 function getStarknetProvider(): RpcProvider {
   return new RpcProvider({
-    nodeUrl: env.STARKNET_RPC_URL,
-    headers: env.STARKNET_RPC_API_KEY
-      ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` }
-      : undefined,
+    nodeUrl: env.BACKGROUND_STARKNET_RPC_URL,
   });
 }
 
@@ -78,7 +75,7 @@ function getStarknetAccount(): Account {
 }
 
 function ensureStarknetWriteConfig(): void {
-  const required: Array<keyof typeof env> = ['STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'STARKNET_PRIVATE_KEY'];
+  const required: Array<keyof typeof env> = ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_PRIVATE_KEY', 'STARKNET_ADDRESS'];
   const missing = required.filter(key => !env[key]);
 
   if (missing.length > 0) {
@@ -93,7 +90,7 @@ function compactValue(value: string): string {
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
-    await ensureStarknetRpcReachable('STARKNET_RPC_URL', env.STARKNET_RPC_URL, env.STARKNET_RPC_API_KEY);
+    await ensureStarknetRpcReachable('BACKGROUND_STARKNET_RPC_URL', env.BACKGROUND_STARKNET_RPC_URL);
 
     const call: Call = {
       contractAddress: transaction.contractAddress,

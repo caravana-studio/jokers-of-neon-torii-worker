@@ -48,6 +48,8 @@ MANIFEST_SLOT_ENV=dev
 
 # Opcional (para ejecutar transacciones)
 STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
+# Opcional: RPC separado para worker/background. Si no se define, usa STARKNET_RPC_URL.
+BACKGROUND_STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 STARKNET_PRIVATE_KEY=0x...
 STARKNET_ADDRESS=0x...
 
