@@ -68,8 +68,9 @@ function calculateEffectiveStreak(input: {
   currentStreak: number;
   lastCompletedDay: number;
   protectorsAvailable: number;
+  currentDay?: number;
 }) {
-  const currentDay = getCurrentDailyPeriodId();
+  const currentDay = input.currentDay ?? getCurrentDailyPeriodId();
   const hasStarted = input.currentStreak > 0 && input.lastCompletedDay > 0;
   const daysMissed =
     hasStarted && currentDay > input.lastCompletedDay
@@ -78,6 +79,10 @@ function calculateEffectiveStreak(input: {
   const isProtected = hasStarted && daysMissed > 0 && daysMissed <= input.protectorsAvailable;
   const isBroken = hasStarted && daysMissed > input.protectorsAvailable;
   const effectiveStreak = isBroken ? 0 : input.currentStreak;
+  const protectorsUsed = Math.min(input.protectorsAvailable, daysMissed);
+  const protectorsRemaining = Math.max(0, input.protectorsAvailable - protectorsUsed);
+  const effectiveLastCompletedDay =
+    hasStarted && daysMissed > 0 ? Math.max(0, currentDay - 1) : input.lastCompletedDay;
 
   return {
     daysMissed,
@@ -85,6 +90,9 @@ function calculateEffectiveStreak(input: {
     isProtected,
     isBroken,
     effectiveStreak,
+    protectorsAvailable: protectorsRemaining,
+    lastCompletedDay: effectiveLastCompletedDay,
+    protectorsUsed,
   };
 }
 
@@ -242,19 +250,17 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
     const longestStreak = existing ? toNumber(existing.longest_streak) : 0;
     const lastCompletedDay = existing ? toNumber(existing.last_completed_day) : 0;
     const protectorsAvailable = existing ? toNumber(existing.protectors_available) : 0;
-    const missedDays =
-      currentStreak > 0 && lastCompletedDay > 0
-        ? Math.max(0, event.periodId - lastCompletedDay - 1)
-        : 0;
-    const protectorsUsed = Math.min(protectorsAvailable, missedDays);
-    const hasEnoughProtectors = missedDays <= protectorsAvailable;
+    const resolvedGap = calculateEffectiveStreak({
+      currentStreak,
+      lastCompletedDay,
+      protectorsAvailable,
+      currentDay: event.periodId,
+    });
     const nextStreak =
       currentStreak <= 0
         ? 1
-        : missedDays === 0 || hasEnoughProtectors
-        ? currentStreak + 1
-        : 1;
-    const nextProtectors = Math.max(0, protectorsAvailable - protectorsUsed);
+        : resolvedGap.effectiveStreak + 1;
+    const nextProtectors = resolvedGap.protectorsAvailable;
     const effective = calculateEffectiveStreak({
       currentStreak: nextStreak,
       lastCompletedDay: event.periodId,
@@ -306,7 +312,7 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
       missionId: event.missionId,
       templateId: event.templateId,
       currentStreak: nextStreak,
-      protectorsUsed,
+      protectorsUsed: resolvedGap.protectorsUsed,
       protectorsAvailable: nextProtectors,
       metadata: {
         gameId: event.gameId,
