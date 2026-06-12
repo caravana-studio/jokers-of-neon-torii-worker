@@ -15,7 +15,7 @@ import {
   shouldLogWorkerGame,
 } from './services/workerGameFilter.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
-import { getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
+import { getSlotToriiUrl, getSlotRelayUrl, getSlotChainId } from './config/slotConfig.js';
 import { getWorldAddress } from './config/manifest.js';
 import {
   getAllBlockchainEventHandlers,
@@ -547,9 +547,10 @@ async function handleLevelPassed(
 export async function startToriiWorker() {
   const toriiUrl = getSlotToriiUrl();
   const relayUrl = getSlotRelayUrl();
+  const chainId = getSlotChainId();
   const worldAddress = getWorldAddress();
 
-  logWorkerLine('torii', { action: 'config', toriiUrl, relayUrl, world: worldAddress });
+  logWorkerLine('torii', { action: 'config', toriiUrl, relayUrl, chainId, world: worldAddress });
   logWorkerLine('torii', { action: 'sdk_init' });
 
   // Initialize SDK with example configuration
@@ -562,7 +563,7 @@ export async function startToriiWorker() {
     domain: {
       name: 'jokers-of-neon-worker',
       version: '1.0',
-      chainId: 'SN_SEPOLIA',
+      chainId,
       revision: '1',
     },
   });

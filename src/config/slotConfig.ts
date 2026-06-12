@@ -6,6 +6,16 @@ interface VersionResponse {
   version: string;
   maintenance?: boolean;
   slot?: Record<string, string>;
+  slotEndpoints?: Record<string, SlotEndpointConfig>;
+}
+
+interface SlotEndpointConfig {
+  kind?: string;
+  slotInstance?: string;
+  rpcUrl?: string;
+  toriiUrl?: string;
+  relayUrl?: string;
+  chainId?: string;
 }
 
 const configuredEnv = process.env.MANIFEST_SLOT_ENV?.trim().toLowerCase() || DEFAULT_ENV;
@@ -14,6 +24,7 @@ let slotInstance: string | undefined = undefined;
 let slotRpcUrl: string | undefined = undefined;
 let slotToriiUrl: string | undefined = undefined;
 let slotRelayUrl: string | undefined = undefined;
+let slotChainId: string | undefined = undefined;
 let preloadPromise: Promise<void> | null = null;
 
 const getBaseUrl = (slot: string) => `https://api.cartridge.gg/x/${slot}`;
@@ -33,7 +44,31 @@ export const preloadSlotConfig = async (): Promise<void> => {
         }
 
         const data = (await response.json()) as VersionResponse;
+        const endpointConfig = data.slotEndpoints?.[configuredEnv];
         const resolvedSlot = data.slot?.[configuredEnv]?.trim();
+
+        if (endpointConfig) {
+          const endpointRpcUrl = endpointConfig.rpcUrl?.trim();
+          const endpointToriiUrl = endpointConfig.toriiUrl?.trim();
+          const endpointRelayUrl = endpointConfig.relayUrl?.trim();
+
+          if (!endpointRpcUrl || !endpointToriiUrl || !endpointRelayUrl) {
+            throw new Error(
+              `Slot endpoint for env "${configuredEnv}" must include rpcUrl, toriiUrl and relayUrl in version.json`
+            );
+          }
+
+          slotInstance = endpointConfig.slotInstance?.trim() || configuredEnv;
+          slotRpcUrl = endpointRpcUrl;
+          slotToriiUrl = endpointToriiUrl;
+          slotRelayUrl = endpointRelayUrl;
+          slotChainId = endpointConfig.chainId?.trim() || 'SN_SEPOLIA';
+
+          console.info(
+            `[config] slot endpoint env=${configuredEnv} slot=${slotInstance} rpc=${slotRpcUrl} torii=${slotToriiUrl} relay=${slotRelayUrl}`
+          );
+          return;
+        }
 
         if (!resolvedSlot) {
           throw new Error(`Slot instance not found for env "${configuredEnv}" in version.json`);
@@ -43,6 +78,7 @@ export const preloadSlotConfig = async (): Promise<void> => {
         slotRpcUrl = `${getBaseUrl(resolvedSlot)}/katana`;
         slotToriiUrl = `${getBaseUrl(resolvedSlot)}/torii`;
         slotRelayUrl = `/dns4/api.cartridge.gg/tcp/443/x-parity-wss/%2Fx%2F${resolvedSlot}%2Ftorii%2Fwss`;
+        slotChainId = 'SN_SEPOLIA';
 
         console.info(
           `[config] slot env=${configuredEnv} slot=${slotInstance} rpc=${slotRpcUrl} torii=${slotToriiUrl}`
@@ -76,6 +112,13 @@ export const getSlotRelayUrl = (): string => {
     throw new Error('[slot-config] Slot Relay URL not loaded. Call preloadSlotConfig() first.');
   }
   return slotRelayUrl;
+};
+
+export const getSlotChainId = (): string => {
+  if (!slotChainId) {
+    throw new Error('[slot-config] Slot chain ID not loaded. Call preloadSlotConfig() first.');
+  }
+  return slotChainId;
 };
 
 export const getSlotInstance = (): string => {
