@@ -1,13 +1,12 @@
 const VERSION_URL = 'https://jokersofneon.com/app/settings/version.json';
 const FETCH_TIMEOUT_MS = 6000;
 const DEFAULT_ENV = 'dev';
+const DEFAULT_CARTRIDGE_SLOT_CHAIN_ID = 'SN_SEPOLIA';
 
 interface VersionResponse {
   version: string;
   maintenance?: boolean;
   slot?: Record<string, string>;
-  slotChainId?: Record<string, string>;
-  slotChainIds?: Record<string, string>;
   slotEndpoints?: Record<string, SlotEndpointConfig>;
 }
 
@@ -48,9 +47,6 @@ export const preloadSlotConfig = async (): Promise<void> => {
         const data = (await response.json()) as VersionResponse;
         const endpointConfig = data.slotEndpoints?.[configuredEnv];
         const resolvedSlot = data.slot?.[configuredEnv]?.trim();
-        const resolvedSlotChainId =
-          data.slotChainId?.[configuredEnv]?.trim() ||
-          data.slotChainIds?.[configuredEnv]?.trim();
 
         if (endpointConfig) {
           const endpointRpcUrl = endpointConfig.rpcUrl?.trim();
@@ -90,14 +86,7 @@ export const preloadSlotConfig = async (): Promise<void> => {
         slotRpcUrl = `${getBaseUrl(resolvedSlot)}/katana`;
         slotToriiUrl = `${getBaseUrl(resolvedSlot)}/torii`;
         slotRelayUrl = `/dns4/api.cartridge.gg/tcp/443/x-parity-wss/%2Fx%2F${resolvedSlot}%2Ftorii%2Fwss`;
-
-        if (!resolvedSlotChainId) {
-          throw new Error(
-            `Slot env "${configuredEnv}" must include chainId in version.json via slotEndpoints, slotChainId or slotChainIds`
-          );
-        }
-
-        slotChainId = resolvedSlotChainId;
+        slotChainId = DEFAULT_CARTRIDGE_SLOT_CHAIN_ID;
 
         console.info(
           `[config] slot env=${configuredEnv} slot=${slotInstance} chainId=${slotChainId} rpc=${slotRpcUrl} torii=${slotToriiUrl}`
