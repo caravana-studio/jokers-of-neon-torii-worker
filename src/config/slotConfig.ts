@@ -6,6 +6,8 @@ interface VersionResponse {
   version: string;
   maintenance?: boolean;
   slot?: Record<string, string>;
+  slotChainId?: Record<string, string>;
+  slotChainIds?: Record<string, string>;
   slotEndpoints?: Record<string, SlotEndpointConfig>;
 }
 
@@ -46,11 +48,15 @@ export const preloadSlotConfig = async (): Promise<void> => {
         const data = (await response.json()) as VersionResponse;
         const endpointConfig = data.slotEndpoints?.[configuredEnv];
         const resolvedSlot = data.slot?.[configuredEnv]?.trim();
+        const resolvedSlotChainId =
+          data.slotChainId?.[configuredEnv]?.trim() ||
+          data.slotChainIds?.[configuredEnv]?.trim();
 
         if (endpointConfig) {
           const endpointRpcUrl = endpointConfig.rpcUrl?.trim();
           const endpointToriiUrl = endpointConfig.toriiUrl?.trim();
           const endpointRelayUrl = endpointConfig.relayUrl?.trim();
+          const endpointChainId = endpointConfig.chainId?.trim();
 
           if (!endpointRpcUrl || !endpointToriiUrl || !endpointRelayUrl) {
             throw new Error(
@@ -58,14 +64,20 @@ export const preloadSlotConfig = async (): Promise<void> => {
             );
           }
 
+          if (!endpointChainId) {
+            throw new Error(
+              `Slot endpoint for env "${configuredEnv}" must include chainId in version.json`
+            );
+          }
+
           slotInstance = endpointConfig.slotInstance?.trim() || configuredEnv;
           slotRpcUrl = endpointRpcUrl;
           slotToriiUrl = endpointToriiUrl;
           slotRelayUrl = endpointRelayUrl;
-          slotChainId = endpointConfig.chainId?.trim() || 'SN_SEPOLIA';
+          slotChainId = endpointChainId;
 
           console.info(
-            `[config] slot endpoint env=${configuredEnv} slot=${slotInstance} rpc=${slotRpcUrl} torii=${slotToriiUrl} relay=${slotRelayUrl}`
+            `[config] slot endpoint env=${configuredEnv} slot=${slotInstance} chainId=${slotChainId} rpc=${slotRpcUrl} torii=${slotToriiUrl} relay=${slotRelayUrl}`
           );
           return;
         }
@@ -78,10 +90,17 @@ export const preloadSlotConfig = async (): Promise<void> => {
         slotRpcUrl = `${getBaseUrl(resolvedSlot)}/katana`;
         slotToriiUrl = `${getBaseUrl(resolvedSlot)}/torii`;
         slotRelayUrl = `/dns4/api.cartridge.gg/tcp/443/x-parity-wss/%2Fx%2F${resolvedSlot}%2Ftorii%2Fwss`;
-        slotChainId = 'SN_SEPOLIA';
+
+        if (!resolvedSlotChainId) {
+          throw new Error(
+            `Slot env "${configuredEnv}" must include chainId in version.json via slotEndpoints, slotChainId or slotChainIds`
+          );
+        }
+
+        slotChainId = resolvedSlotChainId;
 
         console.info(
-          `[config] slot env=${configuredEnv} slot=${slotInstance} rpc=${slotRpcUrl} torii=${slotToriiUrl}`
+          `[config] slot env=${configuredEnv} slot=${slotInstance} chainId=${slotChainId} rpc=${slotRpcUrl} torii=${slotToriiUrl}`
         );
       } catch (error) {
         clearTimeout(timeoutId);
