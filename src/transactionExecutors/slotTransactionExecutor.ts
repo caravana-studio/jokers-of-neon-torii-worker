@@ -1,14 +1,24 @@
-import { Account, Call, RpcProvider, type UniversalDetails } from 'starknet';
+import { Account, Call, RpcProvider, shortString, type RpcProviderOptions, type UniversalDetails } from 'starknet';
 import { env } from '../env.js';
-import { getSlotInstance, getSlotRpcUrl } from '../config/slotConfig.js';
+import { getSlotChainId, getSlotInstance, getSlotRpcUrl } from '../config/slotConfig.js';
 import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import { ensureStarknetRpcReachable } from './starknetTransactionExecutor.js';
 
+function encodeSlotChainId(chainId: string): NonNullable<RpcProviderOptions['chainId']> {
+  return (
+    chainId.startsWith('0x') ? chainId : shortString.encodeShortString(chainId)
+  ) as NonNullable<RpcProviderOptions['chainId']>;
+}
+
 function getSlotProvider(): RpcProvider {
-  return new RpcProvider({
+  const slotChainId = getSlotChainId();
+  const providerOptions: RpcProviderOptions = {
     nodeUrl: getSlotRpcUrl(),
-  });
+    chainId: encodeSlotChainId(slotChainId),
+  };
+
+  return new RpcProvider(providerOptions);
 }
 
 function getSlotAccount(): Account {
@@ -45,6 +55,7 @@ export async function executeSlotQueueTransaction(transaction: QueuedTransaction
 
     const slotInstance = getSlotInstance();
     const slotRpcUrl = getSlotRpcUrl();
+    const slotChainId = getSlotChainId();
     await ensureStarknetRpcReachable(`Slot RPC (${slotInstance})`, slotRpcUrl);
 
     const call: Call = {
@@ -54,7 +65,7 @@ export async function executeSlotQueueTransaction(transaction: QueuedTransaction
     };
 
     console.log(
-      `[executor] send chain=slot slot=${slotInstance} op=${transaction.blockchain}.${transaction.entrypoint} account=${compactValue(env.SLOT_MASTER_ADDRESS)} contract=${compactValue(call.contractAddress)}`
+      `[executor] send chain=slot slot=${slotInstance} chainId=${slotChainId} op=${transaction.blockchain}.${transaction.entrypoint} account=${compactValue(env.SLOT_MASTER_ADDRESS)} contract=${compactValue(call.contractAddress)}`
     );
 
     const account = getSlotAccount();
