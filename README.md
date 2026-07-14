@@ -12,7 +12,7 @@ Replaces separate deploys of `jokers-of-neon-torii-worker`, `jokers-of-neon-cron
 
 # Jokers of Neon - Event Listener
 
-Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
+Bot para escuchar eventos de Torii mediante el cliente gRPC oficial de Dojo.
 
 ## Características
 
@@ -21,7 +21,8 @@ Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón 
 - ✅ Modo solo lectura (sin ejecutar transacciones)
 - ✅ Modo ejecución (ejecuta transacciones en Starknet)
 - ✅ Soporte multi-chain para encolar y ejecutar escrituras en Celo
-- ✅ Basado en el SDK oficial de Dojo.js
+- ✅ Suscripción gRPC compatible con Torii 1.8
+- ✅ Backfill automático y deduplicación por modelo de evento
 
 ## Instalación
 
@@ -140,7 +141,7 @@ Si tienes acceso al proyecto de Cairo/Dojo, puedes generar los schemas TypeScrip
 [config] slot env=testnet slot=jokers-testnet-sepolia rpc=https://api.cartridge.gg/x/jokers-testnet-sepolia/katana
 [config] manifest env=testnet world=0x...
 [queue] ready pending=0
-[torii] action=listener_ready events=MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate
+[torii] action=listener_ready transport=grpc events=MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate
 [event] type=current_hand game=1234 cards=[1,2,3,4,5] chain=slot
 [game-step] saved game=1234 step=7
 ```
@@ -153,6 +154,7 @@ Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el se
 ### El bot no escucha eventos
 - Verifica que `MANIFEST_SLOT_ENV` apunte al entorno correcto (`dev`, `prods3` u otro alias válido presente en `version.json`)
 - Revisa los logs de startup para confirmar que Torii URL y World Address se resolvieron correctamente
+- Confirma que aparezca `action=listener_ready transport=grpc`
 - Asegúrate de que el modelo de evento esté correctamente nombrado en el código
 
 ## Referencias

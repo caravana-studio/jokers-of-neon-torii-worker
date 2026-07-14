@@ -1,6 +1,4 @@
-import { w3cwebsocket } from 'websocket';
-import { init } from '@dojoengine/sdk/node';
-import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
+import { ToriiGrpcClient } from '@dojoengine/grpc';
 import { num, shortString } from 'starknet';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
@@ -15,7 +13,7 @@ import {
   shouldLogWorkerGame,
 } from './services/workerGameFilter.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
-import { getSlotToriiUrl, getSlotRelayUrl, getSlotChainId } from './config/slotConfig.js';
+import { getSlotToriiUrl, getSlotChainId } from './config/slotConfig.js';
 import { getWorldAddress } from './config/manifest.js';
 import {
   getAllBlockchainEventHandlers,
@@ -25,17 +23,110 @@ import {
 } from './blockchainEventHandlers.js';
 import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 
-// Configuración necesaria para WebSocket en Node.js
-// @ts-ignore
-global.WebSocket = w3cwebsocket;
-// @ts-ignore
-global.WorkerGlobalScope = global;
-
 // Initialize transaction queue
 const txQueue = getTransactionQueue();
 
 const workerBlockchainFilter = getWorkerBlockchainFilter();
 const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
+const TORII_EVENT_MODELS = [
+  'jokers_of_neon_core-MissionCompletedEvent',
+  'jokers_of_neon_core-MissionCompletedV2Event',
+  'jokers_of_neon_core-CreateGameEvent',
+  'jokers_of_neon_core-CurrentHandEvent',
+  'jokers_of_neon_core-PlayWinGameEvent',
+  'jokers_of_neon_core-PlayGameOverEvent',
+  'jokers_of_neon_core-LevelPassedEvent',
+  'jokers_of_neon_core-ProgressionGameUpdateEvent',
+] as const;
+const TORII_BACKFILL_LIMIT = 100;
+const TORII_BACKFILL_INTERVAL_MS = 30_000;
+const MAX_SEEN_TORII_EVENTS = 5_000;
+
+type GrpcEventMessage = {
+  hashed_keys?: string;
+  created_at?: number;
+  updated_at?: number;
+  executed_at?: number;
+  world_address?: string;
+  models?: Record<string, unknown>;
+};
+
+function unwrapToriiValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(unwrapToriiValue);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  if ('type' in record && 'value' in record) {
+    return unwrapToriiValue(record.value);
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, nestedValue]) => [key, unwrapToriiValue(nestedValue)])
+  );
+}
+
+export function normalizeGrpcEventMessage(item: GrpcEventMessage): Record<string, unknown> {
+  const modelsByNamespace: Record<string, Record<string, unknown>> = {};
+
+  for (const [qualifiedModelName, modelValue] of Object.entries(item.models ?? {})) {
+    const separatorIndex = qualifiedModelName.lastIndexOf('-');
+    if (separatorIndex <= 0 || separatorIndex === qualifiedModelName.length - 1) {
+      continue;
+    }
+
+    const namespace = qualifiedModelName.slice(0, separatorIndex);
+    const modelName = qualifiedModelName.slice(separatorIndex + 1);
+    modelsByNamespace[namespace] ??= {};
+    modelsByNamespace[namespace][modelName] = unwrapToriiValue(modelValue);
+  }
+
+  return {
+    ...item,
+    models: modelsByNamespace,
+  };
+}
+
+function toriiModelFingerprint(
+  item: GrpcEventMessage,
+  qualifiedModelName: string,
+  modelValue: unknown
+): string {
+  return JSON.stringify(
+    [item.world_address, item.hashed_keys, qualifiedModelName, modelValue],
+    (_key, value) => typeof value === 'bigint' ? value.toString() : value
+  );
+}
+
+function createToriiEventQuery() {
+  return {
+    clause: createToriiEventClause(),
+    no_hashed_keys: false,
+    models: [...TORII_EVENT_MODELS],
+    pagination: {
+      limit: TORII_BACKFILL_LIMIT,
+      cursor: undefined,
+      direction: 'Backward' as const,
+      order_by: [],
+    },
+    historical: false,
+    world_addresses: [],
+  };
+}
+
+function createToriiEventClause() {
+  return {
+    Keys: {
+      keys: [],
+      pattern_matching: 'VariableLen' as const,
+      models: [...TORII_EVENT_MODELS],
+    },
+  };
+}
 
 function compactValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -546,29 +637,18 @@ async function handleLevelPassed(
 
 export async function startToriiWorker() {
   const toriiUrl = getSlotToriiUrl();
-  const relayUrl = getSlotRelayUrl();
   const chainId = getSlotChainId();
   const worldAddress = getWorldAddress();
 
-  logWorkerLine('torii', { action: 'config', toriiUrl, relayUrl, chainId, world: worldAddress });
-  logWorkerLine('torii', { action: 'sdk_init' });
+  logWorkerLine('torii', { action: 'config', transport: 'grpc', toriiUrl, chainId, world: worldAddress });
+  logWorkerLine('torii', { action: 'grpc_init' });
 
-  // Initialize SDK with example configuration
-  const sdk = await init({
-    client: {
-      toriiUrl,
-      relayUrl, // Must be in multiaddr format
-      worldAddress,
-    },
-    domain: {
-      name: 'jokers-of-neon-worker',
-      version: '1.0',
-      chainId,
-      revision: '1',
-    },
+  const toriiClient = new ToriiGrpcClient({
+    toriiUrl,
+    worldAddress,
   });
 
-  logWorkerLine('torii', { action: 'sdk_ready' });
+  logWorkerLine('torii', { action: 'grpc_ready' });
 
   // Callback when an event is detected
   const onEventUpdated = async (response: any) => {
@@ -754,45 +834,141 @@ export async function startToriiWorker() {
     }
   };
 
-  // Create query for events
-  const query = new HistoricalToriiQueryBuilder()
-    .withEntityModels([
-      'jokers_of_neon_core-MissionCompletedEvent',
-      'jokers_of_neon_core-MissionCompletedV2Event',
-      'jokers_of_neon_core-CreateGameEvent',
-      'jokers_of_neon_core-CurrentHandEvent',
-      'jokers_of_neon_core-PlayWinGameEvent',
-      'jokers_of_neon_core-PlayGameOverEvent',
-      'jokers_of_neon_core-LevelPassedEvent',
-      'jokers_of_neon_core-ProgressionGameUpdateEvent'
-    ])
-    .withDirection('Backward')
-    .withLimit(10);
+  const seenEvents = new Map<string, true>();
+  let processingChain = Promise.resolve();
 
-  try {
-    // Get initial historical events
-    const historicalEvents = await sdk.getEventMessages({ query });
-    const items = historicalEvents.getItems();
-    logWorkerLine('torii', { action: 'historical_events', count: items.length });
-  } catch (error) {
-    console.warn('⚠️  Error retrieving historical events:', error);
-  }
+  const rememberModelFingerprint = (
+    item: GrpcEventMessage,
+    qualifiedModelName: string,
+    modelValue: unknown
+  ): boolean => {
+    const fingerprint = toriiModelFingerprint(item, qualifiedModelName, modelValue);
+    if (seenEvents.has(fingerprint)) {
+      return false;
+    }
 
-  // Subscribe to real-time events
+    seenEvents.set(fingerprint, true);
+    if (seenEvents.size > MAX_SEEN_TORII_EVENTS) {
+      const oldestFingerprint = seenEvents.keys().next().value;
+      if (oldestFingerprint) {
+        seenEvents.delete(oldestFingerprint);
+      }
+    }
+
+    return true;
+  };
+
+  const seedHistoricalBaseline = async (): Promise<void> => {
+    const historicalEvents = await toriiClient.getEventMessages(createToriiEventQuery());
+    const items = [...historicalEvents.items] as GrpcEventMessage[];
+
+    for (const item of items) {
+      const normalizedItem = normalizeGrpcEventMessage(item);
+      const modelsByNamespace = normalizedItem.models as Record<string, Record<string, unknown>>;
+
+      for (const qualifiedModelName of TORII_EVENT_MODELS) {
+        const separatorIndex = qualifiedModelName.lastIndexOf('-');
+        const namespace = qualifiedModelName.slice(0, separatorIndex);
+        const modelName = qualifiedModelName.slice(separatorIndex + 1);
+        const modelValue = modelsByNamespace[namespace]?.[modelName];
+        if (modelValue !== undefined) {
+          rememberModelFingerprint(item, qualifiedModelName, modelValue);
+        }
+      }
+    }
+
+    logWorkerLine('torii', { action: 'historical_baseline', count: items.length });
+  };
+
+  const enqueueEvent = (item: GrpcEventMessage, source: 'live' | 'backfill'): Promise<void> => {
+    processingChain = processingChain
+      .then(async () => {
+        const normalizedItem = normalizeGrpcEventMessage(item);
+        const modelsByNamespace = normalizedItem.models as Record<string, Record<string, unknown>>;
+
+        // Torii event messages are cumulative: a later update can contain both
+        // the new model and models delivered previously for the same entity.
+        // Process and deduplicate each model payload independently.
+        for (const qualifiedModelName of TORII_EVENT_MODELS) {
+          const separatorIndex = qualifiedModelName.lastIndexOf('-');
+          const namespace = qualifiedModelName.slice(0, separatorIndex);
+          const modelName = qualifiedModelName.slice(separatorIndex + 1);
+          const modelValue = modelsByNamespace[namespace]?.[modelName];
+          if (modelValue === undefined) {
+            continue;
+          }
+
+          if (!rememberModelFingerprint(item, qualifiedModelName, modelValue)) {
+            continue;
+          }
+
+          await onEventUpdated({
+            data: [{
+              ...normalizedItem,
+              models: {
+                [namespace]: {
+                  [modelName]: modelValue,
+                },
+              },
+            }],
+          });
+        }
+      })
+      .catch(error => {
+        console.error(`[torii] action=process_event_failed source=${source}`, error);
+      });
+
+    return processingChain;
+  };
+
+  const backfillEvents = async (reason: 'startup' | 'recovery'): Promise<void> => {
+    try {
+      const historicalEvents = await toriiClient.getEventMessages(createToriiEventQuery());
+      const items = [...historicalEvents.items] as GrpcEventMessage[];
+      logWorkerLine('torii', { action: 'historical_events', reason, count: items.length });
+
+      // Backward pagination returns newest first. Process oldest first so that
+      // create-game handlers run before later events from the same game.
+      for (const item of items.reverse()) {
+        await enqueueEvent(item, 'backfill');
+      }
+    } catch (error) {
+      console.warn(`[torii] action=historical_events_failed reason=${reason}`, error);
+    }
+  };
+
+  // Establish a no-side-effect baseline so restarts do not replay old events.
+  // The post-subscription backfill below processes only changes that happened
+  // between this snapshot and the moment the live stream became ready.
+  await seedHistoricalBaseline();
+
   logWorkerLine('torii', { action: 'subscribe' });
 
-  const [, subscription] = await sdk.subscribeEventQuery({
-    query,
-    callback: onEventUpdated,
-  });
+  const subscription = await toriiClient.onEventMessageUpdated(
+    createToriiEventClause(),
+    (item: GrpcEventMessage) => {
+      void enqueueEvent(item, 'live');
+    },
+    [worldAddress]
+  );
+
+  await backfillEvents('startup');
+
+  // The gRPC transport reports stream errors internally. Periodic backfill is
+  // a recovery path for silent disconnects and temporary proxy/network issues.
+  const recoveryInterval = setInterval(() => {
+    void backfillEvents('recovery');
+  }, TORII_BACKFILL_INTERVAL_MS);
 
   logWorkerLine('torii', {
     action: 'listener_ready',
+    transport: 'grpc',
     events: 'MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate',
   });
 
   return () => {
     logWorkerLine('torii', { action: 'subscription_cancel' });
+    clearInterval(recoveryInterval);
     subscription.cancel();
   };
 }
