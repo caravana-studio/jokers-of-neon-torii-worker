@@ -84,6 +84,18 @@ type GraphqlEventPage = {
   };
 };
 
+type ToriiStreamSubscriptionOptions = {
+  createStream: () => unknown;
+  onMessage: (response: unknown) => void;
+  onError?: (error: unknown) => void;
+  onComplete?: () => void;
+};
+
+type ToriiClientWithStreamFactory = {
+  __jonSubscriptionHandlersInstalled?: boolean;
+  createStreamSubscription?: (options: ToriiStreamSubscriptionOptions) => unknown;
+};
+
 function unwrapToriiValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(unwrapToriiValue);
@@ -1405,15 +1417,56 @@ export async function startToriiWorker() {
     }, TORII_RECONNECT_DELAY_MS);
   };
 
+  const formatSubscriptionError = (error: unknown): { message: string; code?: string } => {
+    const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+    return {
+      message: error instanceof Error ? error.message : String(error),
+      code: typeof record?.code === 'string' ? record.code : undefined,
+    };
+  };
+
+  const installToriiStreamHandlers = (): boolean => {
+    const streamClient = toriiClient as unknown as ToriiClientWithStreamFactory;
+    if (streamClient.__jonSubscriptionHandlersInstalled) {
+      return true;
+    }
+
+    const createStreamSubscription = streamClient.createStreamSubscription?.bind(streamClient);
+    if (!createStreamSubscription) {
+      return false;
+    }
+
+    streamClient.createStreamSubscription = (options: ToriiStreamSubscriptionOptions) => createStreamSubscription({
+      ...options,
+      onError: options.onError ?? ((error: unknown) => {
+        const { message, code } = formatSubscriptionError(error);
+        logWorkerLine('torii', {
+          action: 'subscription_error',
+          message,
+          code,
+        });
+        scheduleReconnect('stream_error', error);
+      }),
+      onComplete: options.onComplete ?? (() => {
+        logWorkerLine('torii', { action: 'subscription_complete' });
+        scheduleReconnect('stream_complete');
+      }),
+    });
+    streamClient.__jonSubscriptionHandlersInstalled = true;
+    return true;
+  };
+
   const watchSubscription = (subscription: unknown): void => {
     const stream = (subscription as { _subscription?: { stream?: unknown } } | null)?._subscription?.stream as
       | { responses?: { onError?: (callback: (error: unknown) => void) => void; onComplete?: (callback: () => void) => void } }
       | undefined;
 
     stream?.responses?.onError?.((error: unknown) => {
+      const { message, code } = formatSubscriptionError(error);
       logWorkerLine('torii', {
         action: 'subscription_error',
-        message: error instanceof Error ? error.message : String(error),
+        message,
+        code,
       });
       scheduleReconnect('stream_error', error);
     });
@@ -1434,6 +1487,8 @@ export async function startToriiWorker() {
       activeSubscription = null;
     }
 
+    const hasManagedStreamHandlers = installToriiStreamHandlers();
+
     logWorkerLine('torii', { action: 'subscribe', reason });
     const subscription = await toriiClient.onEventMessageUpdated(
       createToriiEventClause(),
@@ -1450,7 +1505,9 @@ export async function startToriiWorker() {
       [worldAddress]
     );
     activeSubscription = subscription;
-    watchSubscription(subscription);
+    if (!hasManagedStreamHandlers) {
+      watchSubscription(subscription);
+    }
     logWorkerLine('torii', { action: 'subscribed', reason });
     try {
       await runCatchUp(reason);
