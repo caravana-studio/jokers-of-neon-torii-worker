@@ -2,6 +2,7 @@ import { Account, Call, RpcProvider } from 'starknet';
 import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
+import { resolveStarknetRecommendedTip } from './starknetTip.js';
 
 const rpcHealthCheckPromises = new Map<string, Promise<void>>();
 
@@ -66,9 +67,9 @@ export async function ensureStarknetRpcReachable(label: string, nodeUrl: string,
   return rpcHealthCheckPromises.get(cacheKey)!;
 }
 
-function getStarknetAccount(): Account {
+function getStarknetAccount(provider = getStarknetProvider()): Account {
   return new Account({
-    provider: getStarknetProvider(),
+    provider,
     address: env.STARKNET_ADDRESS,
     signer: env.STARKNET_PRIVATE_KEY,
   });
@@ -102,12 +103,15 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
       `[executor] send chain=starknet op=${transaction.entrypoint} account=${compactValue(env.STARKNET_ADDRESS)} contract=${compactValue(call.contractAddress)}`
     );
 
-    const account = getStarknetAccount();
+    const provider = getStarknetProvider();
+    const account = getStarknetAccount(provider);
+    const tip = await resolveStarknetRecommendedTip(provider);
     const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
       const starknetNonce = await account.getNonce();
       const { transaction_hash } = await account.execute(call, {
         nonce: starknetNonce,
         skipValidate: true,
+        tip,
       });
       return transaction_hash;
     });
