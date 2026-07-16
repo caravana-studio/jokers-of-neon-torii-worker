@@ -54,6 +54,18 @@ BACKGROUND_STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 STARKNET_PRIVATE_KEY=0x...
 STARKNET_ADDRESS=0x...
 
+# Parallel Starknet execution through the executor_accounts pool.
+# Apply supabase/migrations/20260716120000_add_parallel_intent_batches.sql first.
+# SUPABASE_SERVICE_ROLE_KEY is required and must remain server-only.
+TRANSACTION_EXECUTION_MODE=multicall
+STARKNET_BATCH_SIZE=5
+STARKNET_BATCH_WAIT_TIME_MS=1000
+STARKNET_MAX_CONCURRENT_BATCHES=6
+# Optional: limit which executor_accounts IDs are eligible for this worker.
+# STARKNET_EXECUTOR_IDS=1,2,3,4,5,6
+TRANSACTION_QUEUE_POLL_INTERVAL_MS=500
+TRANSACTION_QUEUE_LEASE_MS=600000
+
 # Opcional (para ejecutar escrituras EVM en Celo)
 # En este worker Celo siempre usa mainnet.
 # En Celo el worker usa un unico contrato: Profile.
@@ -102,6 +114,19 @@ Si configuras `STARKNET_PRIVATE_KEY` y las demás variables de Starknet:
 - Escucha eventos en tiempo real
 - Muestra los eventos en la consola
 - **Ejecuta transacciones** en Starknet para procesar recompensas
+
+Con `TRANSACTION_EXECUTION_MODE=multicall`, Starknet deja de usar la cuenta fija
+y compila los mismos intents semánticos en multicalls. Cada cuenta activa de
+`executor_accounts` procesa como máximo un batch a la vez. Slot y Celo usan
+lanes independientes y no bloquean las confirmaciones de Starknet.
+
+Para rollback operativo, usa `TRANSACTION_EXECUTION_MODE=sequential` y conserva
+`STARKNET_PRIVATE_KEY`/`STARKNET_ADDRESS`.
+
+Antes de cambiar a `sequential`, usa temporalmente
+`STARKNET_MAX_CONCURRENT_BATCHES=0` para dejar de tomar batches nuevos y espera
+a que no queden batches `processing` o `submitted`. El plan de deploy, stress y
+rollback está en [docs/PARALLEL_TRANSACTION_ROLLOUT.md](docs/PARALLEL_TRANSACTION_ROLLOUT.md).
 
 ## Estructura del Proyecto
 

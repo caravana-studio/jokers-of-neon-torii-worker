@@ -40,7 +40,7 @@ export const SLOT_TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'missions.generate_weekly',
 ];
 
-export type TransactionStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type TransactionStatus = 'pending' | 'processing' | 'submitted' | 'completed' | 'failed';
 
 export interface EnqueueTransactionParams {
   blockchain: BlockchainId;
