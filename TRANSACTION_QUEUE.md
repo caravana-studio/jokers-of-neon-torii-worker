@@ -34,17 +34,18 @@ Si un multicall revierte, sus intents se liberan con `force_single=true` para ai
 
 ### Stress test manual
 
-El script sólo encola después de una confirmación explícita y acepta cualquier intent válido para el ambiente de prueba:
+El preset `xp-zero` encola 200 calls `test_xp` con XP cero. Recorren el pipeline on-chain y pagan fees, pero no modifican XP:
 
 ```bash
+STRESS_TEST_MODE=onchain \
 STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_ONCHAIN \
-STRESS_TEST_COUNT=100 \
-STRESS_TEST_ENQUEUE_CONCURRENCY=20 \
-STRESS_TEST_INTENT_JSON='{"blockchain":"starknet","operation":"xp.test","targetRef":"xp_system","payload":{"address":"0x...","seasonId":1,"seasonXpLow":"1","seasonXpHigh":"0","profileXpLow":"1","profileXpHigh":"0"}}' \
+STRESS_TEST_RUN_ID=parallel_200_01 \
+STRESS_TEST_COUNT=200 \
+STRESS_TEST_PRESET=xp-zero \
 bun run stress:queue
 ```
 
-Usar exclusivamente payloads y contratos de testnet preparados para modificar estado.
+Para insertar 200 registros sin ejecución on-chain, usar `STRESS_TEST_MODE=database-only` y `STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_DATABASE`. Ese modo no prueba el executor.
 
 ## Características
 

@@ -59,17 +59,53 @@ Omitir `STARKNET_EXECUTOR_IDS` usa las seis cuentas activas. Definirlo limita la
 
 ## Stress test
 
-El script sólo encola; el worker desplegado ejecuta. Usar un payload idempotente o preparado específicamente para testnet.
+Los scripts sólo insertan filas; los servicios desplegados las consumen. El preset `xp-zero` llama `test_xp` con XP de temporada y perfil en cero. El contrato valida el permiso del executor pero no modifica XP cuando ambos valores son cero. La prueba sí envía transacciones y paga fees.
+
+Antes de comenzar, esperar que ambas colas normales estén vacías. Usar el mismo identificador en los dos repos, por ejemplo `parallel_200_01`.
+
+Worker — 200 filas en `torii_worker_intent_queue`:
 
 ```bash
+cd ../jokers-of-neon-torii-worker
+
+STRESS_TEST_MODE=onchain \
 STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_ONCHAIN \
-STRESS_TEST_COUNT=100 \
-STRESS_TEST_ENQUEUE_CONCURRENCY=20 \
-STRESS_TEST_INTENT_JSON='{"blockchain":"starknet","operation":"xp.test","targetRef":"xp_system","payload":{"address":"0x...","seasonId":1,"seasonXpLow":"1","seasonXpHigh":"0","profileXpLow":"1","profileXpHigh":"0"}}' \
+STRESS_TEST_RUN_ID=parallel_200_01 \
+STRESS_TEST_COUNT=200 \
+STRESS_TEST_INSERT_BATCH_SIZE=50 \
+STRESS_TEST_PRESET=xp-zero \
 bun run stress:queue
 ```
 
-Rampa sugerida: 30 intents con 2 cuentas, 100 con 6 cuentas y finalmente 300. No iniciar el siguiente escalón hasta que el anterior quede sin `processing`/`submitted` y el estado on-chain sea correcto.
+API — 200 filas en `api_transaction_queue` usando el mismo contrato XP del worker:
+
+```bash
+cd ../jokers-of-neon-api
+
+STRESS_TEST_MODE=onchain \
+STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_ONCHAIN \
+STRESS_TEST_RUN_ID=parallel_200_01 \
+STRESS_TEST_COUNT=200 \
+STRESS_TEST_INSERT_BATCH_SIZE=50 \
+STRESS_TEST_CONTRACT_ADDRESS=0x_XP_SYSTEM_MAINNET \
+npm run stress:queue
+```
+
+Se pueden ejecutar los comandos uno inmediatamente después del otro para que las 400 calls compitan por el pool compartido. `max_retries=0` evita repetir individualmente una call de stress que falle.
+
+### Simulación sólo de base de datos
+
+`database-only` inserta las filas directamente como `completed`, con hashes `simulated:*`. Sirve para probar volumen, índices y consultas de Supabase, pero no prueba batching, cuentas, nonces, RPC ni receipts.
+
+```bash
+STRESS_TEST_MODE=database-only \
+STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_DATABASE \
+STRESS_TEST_RUN_ID=db_200_01 \
+STRESS_TEST_COUNT=200 \
+bun run stress:queue
+```
+
+Ejecutar el equivalente desde API con `npm run stress:queue`. En ese modo `STRESS_TEST_CONTRACT_ADDRESS` es opcional.
 
 ## Monitoreo
 
@@ -136,6 +172,21 @@ SELECT status, COUNT(*), MIN(created_at), MAX(completed_at)
 FROM torii_worker_intent_queue
 WHERE metadata->>'stressRunId' = 'stress_...'
 GROUP BY status;
+
+SELECT status, COUNT(*)
+FROM api_transaction_queue
+WHERE id LIKE 'stress_api_parallel_200_01_%'
+GROUP BY status;
+```
+
+Limpieza opcional después de conservar las métricas:
+
+```sql
+DELETE FROM torii_worker_intent_queue
+WHERE metadata->>'stressRunId' = 'db_200_01';
+
+DELETE FROM api_transaction_queue
+WHERE id LIKE 'stress_api_db_200_01_%';
 ```
 
 ## Criterios para subir de 2 a 6 cuentas
