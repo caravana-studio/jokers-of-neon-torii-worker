@@ -2,7 +2,49 @@
 
 ## Descripción
 
-Este sistema implementa una cola persistente para transacciones de Starknet usando Supabase como base de datos. Permite que las transacciones sobrevivan reinicios del worker y se ejecuten secuencialmente con validación.
+Este sistema implementa una cola persistente de intents multi-chain usando Supabase. En modo `sequential` mantiene el comportamiento histórico. En modo `multicall`, conserva los intents semánticos pero compila y agrupa los de Starknet para ejecutarlos en paralelo con el pool `executor_accounts`.
+
+## Modo multicall paralelo
+
+Aplicar primero:
+
+```text
+supabase/migrations/20260716120000_add_parallel_intent_batches.sql
+```
+
+Configuración recomendada para la primera prueba en testnet:
+
+```env
+TRANSACTION_EXECUTION_MODE=multicall
+STARKNET_BATCH_SIZE=5
+STARKNET_BATCH_WAIT_TIME_MS=1000
+STARKNET_MAX_CONCURRENT_BATCHES=6
+TRANSACTION_QUEUE_POLL_INTERVAL_MS=500
+TRANSACTION_QUEUE_LEASE_MS=600000
+SUPABASE_SERVICE_ROLE_KEY=server-only-secret
+```
+
+`STARKNET_EXECUTOR_IDS=1,2,3` limita qué cuentas puede tomar el worker; no impide que la API use esas mismas cuentas. Si se omite, el worker puede tomar cualquier cuenta activa y libre de `executor_accounts`. La propiedad de cada cuenta se coordina atómicamente entre ambos procesos.
+
+`STARKNET_MAX_CONCURRENT_BATCHES=0` activa drain mode: no toma batches Starknet nuevos, pero continúa reconciliando los hashes ya enviados. Usarlo antes de un rollback a `sequential`.
+
+El claim de executor, la creación del batch y el cambio de estado de los intents ocurren dentro de una función PostgreSQL con `FOR UPDATE SKIP LOCKED`. Un executor sólo mantiene un batch en vuelo. El hash se persiste como `submitted` antes de esperar el receipt; los hashes inconclusos se reconcilian sin reenviar automáticamente.
+
+Si un multicall revierte, sus intents se liberan con `force_single=true` para aislar las calls individualmente. Slot y Celo se ejecutan en lanes separadas y no quedan bloqueadas por una confirmación Starknet.
+
+### Stress test manual
+
+El script sólo encola después de una confirmación explícita y acepta cualquier intent válido para el ambiente de prueba:
+
+```bash
+STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_ONCHAIN \
+STRESS_TEST_COUNT=100 \
+STRESS_TEST_ENQUEUE_CONCURRENCY=20 \
+STRESS_TEST_INTENT_JSON='{"blockchain":"starknet","operation":"xp.test","targetRef":"xp_system","payload":{"address":"0x...","seasonId":1,"seasonXpLow":"1","seasonXpHigh":"0","profileXpLow":"1","profileXpHigh":"0"}}' \
+bun run stress:queue
+```
+
+Usar exclusivamente payloads y contratos de testnet preparados para modificar estado.
 
 ## Características
 
@@ -11,10 +53,11 @@ Este sistema implementa una cola persistente para transacciones de Starknet usan
 - ✅ Sobreviven reinicios del worker
 - ✅ Se pueden consultar y monitorear desde Supabase
 
-### 2. Procesamiento Secuencial
-- ✅ Una transacción a la vez para evitar conflictos de nonce
-- ✅ Cada transacción espera confirmación antes de continuar
-- ✅ FIFO (First In, First Out)
+### 2. Procesamiento configurable
+- ✅ Secuencial como rollback
+- ✅ Multicalls Starknet de tamaño configurable
+- ✅ Varias cuentas ejecutoras en paralelo, cada una dueña de su nonce
+- ✅ Lanes independientes para Slot y Celo
 
 ### 3. Sistema de Reintentos
 - ✅ Hasta 3 intentos por defecto (configurable)
