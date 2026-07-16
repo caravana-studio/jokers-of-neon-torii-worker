@@ -1,4 +1,4 @@
-import { env } from '../env.js';
+import { env, hasStarknetTransactionExecutor } from '../env.js';
 import { supabase } from '../config/supabase.js';
 import { getTransactionQueue } from '../transactionQueue.js';
 import { getLeaderboardService } from './leaderboardService.js';
@@ -220,7 +220,7 @@ export class PackDistributionService {
     }
 
     // Check if required config is available
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !env.STARKNET_PRIVATE_KEY) {
+    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !hasStarknetTransactionExecutor()) {
       console.log(`[packs] skip type=${periodType} reason=profile_write_unconfigured`);
       return false;
     }

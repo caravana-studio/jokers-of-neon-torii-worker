@@ -123,7 +123,7 @@ function toLegacyTransaction(
   };
 }
 
-function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
+export function compileStarknetIntent(intent: QueuedIntent): QueuedTransaction {
   const payload = intent.payload;
 
   switch (intent.operation) {
@@ -322,7 +322,7 @@ export const starknetAdapter: BlockchainAdapter = {
         return await executeSlotQueueTransaction(buildSlotTransaction(intent));
       }
 
-      return await executeStarknetQueueTransaction(buildLegacyTransaction(intent));
+      return await executeStarknetQueueTransaction(compileStarknetIntent(intent));
     } catch (error) {
       return {
         success: false,

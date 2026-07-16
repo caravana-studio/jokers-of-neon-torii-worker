@@ -12,6 +12,7 @@ import {
   type TransactionResult,
   type TransactionStatus,
 } from './transactionQueueTypes.js';
+import { getParallelIntentProcessor } from './runtime/ParallelIntentProcessor.js';
 
 const INTENT_QUEUE_TABLE = 'torii_worker_intent_queue';
 const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
@@ -35,6 +36,30 @@ function compactHash(value: string | undefined): string | undefined {
   return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
 }
 
+function deriveOrderingKey(params: EnqueueTransactionParams): string | null {
+  if (params.operation === 'xp.multiplier_set') {
+    return `${params.blockchain}:xp-multiplier`;
+  }
+
+  if (params.operation === 'progression.sync') {
+    const player = String(params.payload.player ?? '').trim().toLowerCase();
+    return player ? `${params.blockchain}:progression:${player}` : null;
+  }
+
+  if (params.operation === 'game.snapshot' || params.operation === 'round.snapshot') {
+    const game = params.payload.game;
+    if (game && typeof game === 'object' && !Array.isArray(game)) {
+      const gameRecord = game as Record<string, unknown>;
+      const gameId = gameRecord.id ?? gameRecord.game_id;
+      if (gameId !== undefined && gameId !== null) {
+        return `${params.blockchain}:game:${String(gameId)}`;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Persistent Transaction Queue Manager
  * Processes transactions sequentially with validation and Supabase persistence
@@ -48,7 +73,10 @@ export class TransactionQueue {
 
   constructor() {
     // Check if Supabase is configured
-    this.useSupabase = this.enabled && !!(env.SUPABASE_URL && env.SUPABASE_ANON_KEY);
+    this.useSupabase = this.enabled && !!(
+      env.SUPABASE_URL &&
+      (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)
+    );
 
     if (!this.enabled) {
       console.warn('[queue] enabled=false');
@@ -68,6 +96,13 @@ export class TransactionQueue {
 
     if (!this.useSupabase) {
       console.log('[queue] ready storage=memory');
+      return;
+    }
+
+    if (env.TRANSACTION_EXECUTION_MODE === 'multicall') {
+      console.log(`[queue] init storage=supabase mode=multicall filter=${this.blockchainFilter?.join(',') ?? 'all'}`);
+      await getParallelIntentProcessor().initialize();
+      console.log('[queue] ready mode=multicall');
       return;
     }
 
@@ -163,6 +198,7 @@ export class TransactionQueue {
             payload: params.payload,
             intent_version: params.intentVersion ?? 1,
             metadata: params.metadata ?? {},
+            ordering_key: deriveOrderingKey(params),
             status: 'pending',
             retries: 0,
             max_retries: maxRetries,
@@ -186,7 +222,9 @@ export class TransactionQueue {
     }
 
     // Start processing if not already processing
-    if (!this.processing) {
+    if (env.TRANSACTION_EXECUTION_MODE === 'multicall') {
+      getParallelIntentProcessor().start();
+    } else if (!this.processing) {
       this.processQueue();
     }
 
@@ -198,6 +236,10 @@ export class TransactionQueue {
    */
   private async processQueue(): Promise<void> {
     if (!this.enabled) {
+      return;
+    }
+
+    if (env.TRANSACTION_EXECUTION_MODE === 'multicall') {
       return;
     }
 
@@ -488,7 +530,7 @@ export class TransactionQueue {
     try {
       const [pending, processing, completed, failed] = await Promise.all([
         supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'processing'),
+        supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).in('status', ['processing', 'submitted']),
         supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'completed'),
         supabase.from(INTENT_QUEUE_TABLE).select('*', { count: 'exact', head: true }).eq('status', 'failed'),
       ]);
@@ -517,6 +559,12 @@ export class TransactionQueue {
    */
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  public async shutdown(): Promise<void> {
+    if (env.TRANSACTION_EXECUTION_MODE === 'multicall') {
+      await getParallelIntentProcessor().stop();
+    }
   }
 }
 

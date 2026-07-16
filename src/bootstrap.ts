@@ -14,7 +14,7 @@ let stopTorii: (() => void) | null = null;
 
 export async function bootstrap(): Promise<void> {
   console.log(
-    `[startup] unified_worker slotEnv=${env.MANIFEST_SLOT_ENV} torii=${env.TORII_LISTENER_ENABLED} queue=${env.TRANSACTION_QUEUE_ENABLED} cron=${env.CRON_JOBS_ENABLED} notifications=${env.NOTIFICATIONS_ENABLED} missions=${env.MISSIONS_GENERATION_ENABLED} packs=${env.PACK_DISTRIBUTION_ENABLED} agent=${env.GAME_AGENT_ENABLED}`
+    `[startup] unified_worker slotEnv=${env.MANIFEST_SLOT_ENV} torii=${env.TORII_LISTENER_ENABLED} queue=${env.TRANSACTION_QUEUE_ENABLED} executionMode=${env.TRANSACTION_EXECUTION_MODE} cron=${env.CRON_JOBS_ENABLED} notifications=${env.NOTIFICATIONS_ENABLED} missions=${env.MISSIONS_GENERATION_ENABLED} packs=${env.PACK_DISTRIBUTION_ENABLED} agent=${env.GAME_AGENT_ENABLED}`
   );
 
   console.log('[startup] loading_remote_config=slot+manifest');
@@ -54,4 +54,5 @@ export async function shutdown(): Promise<void> {
   scheduler?.stop();
   stopTorii?.();
   stopTorii = null;
+  await getTransactionQueue().shutdown();
 }
