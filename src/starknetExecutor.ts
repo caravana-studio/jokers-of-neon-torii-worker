@@ -4,6 +4,7 @@ import type { Game, Round, GameSpecials, PlayerStats } from './schema.js';
 import { getSlotRpcUrl } from './config/slotConfig.js';
 import { getSlotGameViewsAddress } from './config/manifest.js';
 import { withStarknetWriteLock } from './runtime/StarknetWriteCoordinator.js';
+import { resolveStarknetRecommendedTip } from './transactionExecutors/starknetTip.js';
 
 function compactValue(value: unknown): string {
   const text = String(value);
@@ -65,11 +66,13 @@ export async function executeStarknetTransaction(params: {
   };
 
   // Ejecutar transacción usando 'latest' en lugar de 'pending' (Cartridge no soporta pending)
+  const tip = await resolveStarknetRecommendedTip(provider);
   const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
     const starknetNonce = await account.getNonce();
     const { transaction_hash } = await account.execute(call, {
       nonce: starknetNonce,
       skipValidate: true,
+      tip,
     });
     return transaction_hash;
   });
