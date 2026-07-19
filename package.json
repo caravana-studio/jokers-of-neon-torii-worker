@@ -7,6 +7,7 @@
     "start": "bun run ./dist/index.js",
     "build": "tsup",
     "dev": "bun run ./src/index.ts",
+    "test": "bun test",
     "trigger-missions": "bun run ./src/scripts/triggerMissions.ts",
     "stress:queue": "bun run ./src/scripts/stressTransactionQueue.ts"
   },

@@ -156,7 +156,7 @@ export async function saveGameStep(
   const shouldLog = options.log !== false;
 
   // Check if Supabase is configured
-  if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
     if (shouldLog) {
       console.log(`[game-step] skip game=${gameId} reason=supabase_unconfigured`);
     }

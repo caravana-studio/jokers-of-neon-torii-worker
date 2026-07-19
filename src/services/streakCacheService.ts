@@ -1,6 +1,8 @@
-import { supabase } from '../config/supabase.js';
+import { isSupabaseConfigured, supabase } from '../config/supabase.js';
 import type { MissionCompletedEventData } from '../blockchainEventHandlers.js';
 import type { QueuedIntent, TransactionResult } from '../transactionQueueTypes.js';
+import { CallData, RpcProvider } from 'starknet';
+import { env } from '../env.js';
 
 const SECONDS_IN_DAY = 86400;
 const DAY_START_OFFSET_SECONDS = 21600; // 6am UTC = 3am Argentina time.
@@ -25,6 +27,41 @@ type PlayerStreakRow = {
   pending_period_id: number | string | null;
   pending_mission_id: string | null;
   pending_template_id: string | null;
+  pending_intent_id: string | null;
+  last_tx_hash?: string | null;
+  last_synced_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type DailyStreakPendingMutation = {
+  streak: {
+    player_address: string;
+    username: string;
+    current_streak: number;
+    effective_streak: number;
+    longest_streak: number;
+    last_completed_day: number;
+    protectors_available: number;
+    protectors_needed: number;
+    days_missed: number;
+    is_protected: boolean;
+    is_broken: boolean;
+    sync_status: 'pending';
+    pending_period_id: number;
+    pending_mission_id: string | null;
+    pending_template_id: string | null;
+  };
+  event: {
+    player_address: string;
+    event_type: 'daily_mission_pending';
+    period_id: number;
+    mission_id: string | null;
+    template_id: string | null;
+    current_streak: number;
+    protectors_used: number;
+    protectors_available: number;
+    metadata: Record<string, unknown>;
+  };
 };
 
 function toNumber(value: unknown): number {
@@ -64,7 +101,7 @@ function getCurrentDailyPeriodId(date = new Date()): number {
   return Math.floor((Math.floor(date.getTime() / 1000) - DAY_START_OFFSET_SECONDS) / SECONDS_IN_DAY);
 }
 
-function calculateEffectiveStreak(input: {
+export function calculateEffectiveStreak(input: {
   currentStreak: number;
   lastCompletedDay: number;
   protectorsAvailable: number;
@@ -225,9 +262,11 @@ async function insertStreakEvent(input: {
   }
 }
 
-export async function markDailyStreakPending(event: MissionCompletedEventData): Promise<void> {
+export async function prepareDailyStreakPending(
+  event: MissionCompletedEventData
+): Promise<DailyStreakPendingMutation | null> {
   if (event.periodType !== 'daily' || event.periodId <= 0 || event.xp <= 0) {
-    return;
+    return null;
   }
 
   try {
@@ -239,11 +278,11 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
       toNumber(existing.pending_period_id) === event.periodId &&
       existing.sync_status === 'pending'
     ) {
-      return;
+      return null;
     }
 
     if (existing && event.periodId <= toNumber(existing.last_completed_day)) {
-      return;
+      return null;
     }
 
     const currentStreak = existing ? toNumber(existing.current_streak) : 0;
@@ -273,11 +312,11 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
 
     if (!username) {
       console.log(`[StreakCache] Skipping streak cache for player without real username: ${playerAddress}`);
-      return;
+      return null;
     }
 
-    const { error } = await supabase.from('player_streaks').upsert(
-      {
+    return {
+      streak: {
         player_address: playerAddress,
         username,
         current_streak: nextStreak,
@@ -294,35 +333,26 @@ export async function markDailyStreakPending(event: MissionCompletedEventData): 
         pending_mission_id: event.missionId || null,
         pending_template_id: event.templateId || null,
       },
-      { onConflict: 'player_address' }
-    );
-
-    if (error) {
-      if (isMissingSupabaseTable(error)) {
-        console.warn('[StreakCache] player_streaks table missing; skip pending streak cache');
-        return;
-      }
-      throw error;
-    }
-
-    await insertStreakEvent({
-      playerAddress,
-      eventType: 'daily_mission_pending',
-      periodId: event.periodId,
-      missionId: event.missionId,
-      templateId: event.templateId,
-      currentStreak: nextStreak,
-      protectorsUsed: resolvedGap.protectorsUsed,
-      protectorsAvailable: nextProtectors,
-      metadata: {
-        gameId: event.gameId,
-        xp: event.xp,
-        target: event.target,
-        progress: event.progress,
+      event: {
+        player_address: playerAddress,
+        event_type: 'daily_mission_pending',
+        period_id: event.periodId,
+        mission_id: event.missionId || null,
+        template_id: event.templateId || null,
+        current_streak: nextStreak,
+        protectors_used: resolvedGap.protectorsUsed,
+        protectors_available: nextProtectors,
+        metadata: {
+          gameId: event.gameId,
+          xp: event.xp,
+          target: event.target,
+          progress: event.progress,
+        },
       },
-    });
+    };
   } catch (error) {
-    console.warn('[StreakCache] Could not mark daily streak pending', error);
+    console.warn('[StreakCache] Could not prepare daily streak pending state', error);
+    return null;
   }
 }
 
@@ -351,6 +381,90 @@ function getDailyMissionPayload(intent: QueuedIntent) {
   };
 }
 
+function parseStreakStatusResult(result: string[]) {
+  let offset = 0;
+  return {
+    player: String(result[offset++]),
+    currentStreak: toNumber(result[offset++]),
+    longestStreak: toNumber(result[offset++]),
+    lastCompletedDay: toNumber(result[offset++]),
+    protectorsAvailable: toNumber(result[offset++]),
+    protectorsNeeded: toNumber(result[offset++]),
+    daysMissed: toNumber(result[offset++]),
+    isProtected: toNumber(result[offset++]) === 1,
+    isBroken: toNumber(result[offset++]) === 1,
+  };
+}
+
+async function refreshDailyStreakFromChain(
+  playerAddress: string,
+  reason: string,
+  txHash?: string
+): Promise<PlayerStreakRow> {
+  if (!env.BACKGROUND_STARKNET_RPC_URL || !env.XP_SYSTEM_CONTRACT_ADDRESS) {
+    throw new Error('Streak reconciliation requires BACKGROUND_STARKNET_RPC_URL and XP_SYSTEM_CONTRACT_ADDRESS');
+  }
+
+  const normalizedAddress = normalizeStarknetAddress(playerAddress);
+  const provider = new RpcProvider({ nodeUrl: env.BACKGROUND_STARKNET_RPC_URL });
+  const result = await provider.callContract({
+    contractAddress: env.XP_SYSTEM_CONTRACT_ADDRESS,
+    entrypoint: 'get_streak_status',
+    calldata: CallData.compile([normalizedAddress]),
+  });
+  const chain = parseStreakStatusResult(result);
+  const existing = await getStreakRow(normalizedAddress);
+  const username =
+    existing && !isIgnoredStreakUsername(existing.username)
+      ? existing.username
+      : await resolveStreakUsername(normalizedAddress);
+
+  if (!username) {
+    throw new Error(`Could not resolve streak username for ${normalizedAddress}`);
+  }
+
+  const row = {
+    player_address: normalizedAddress,
+    username,
+    current_streak: chain.currentStreak,
+    effective_streak: chain.isBroken ? 0 : chain.currentStreak,
+    longest_streak: chain.longestStreak,
+    last_completed_day: chain.lastCompletedDay,
+    protectors_available: chain.protectorsAvailable,
+    protectors_needed: chain.protectorsNeeded,
+    days_missed: chain.daysMissed,
+    is_protected: chain.isProtected,
+    is_broken: chain.isBroken,
+    sync_status: 'confirmed' as const,
+    pending_period_id: null,
+    pending_mission_id: null,
+    pending_template_id: null,
+    pending_intent_id: null,
+    last_tx_hash: txHash ?? existing?.last_tx_hash ?? null,
+    last_synced_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('player_streaks')
+    .upsert(row, { onConflict: 'player_address' })
+    .select('*')
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  await insertStreakEvent({
+    playerAddress: normalizedAddress,
+    eventType: 'daily_streak_reconciled',
+    periodId: chain.lastCompletedDay,
+    currentStreak: chain.currentStreak,
+    protectorsAvailable: chain.protectorsAvailable,
+    metadata: { reason },
+  });
+
+  return data as PlayerStreakRow;
+}
+
 export async function markDailyStreakTransactionCompleted(
   intent: QueuedIntent,
   result: TransactionResult
@@ -361,89 +475,11 @@ export async function markDailyStreakTransactionCompleted(
   }
 
   try {
-    const existing = await getStreakRow(payload.playerAddress);
-    const username =
-      existing && !isIgnoredStreakUsername(existing.username)
-        ? existing.username
-        : await resolveStreakUsername(payload.playerAddress);
-
-    if (!username) {
-      console.log(
-        `[StreakCache] Skipping confirmed streak cache for player without real username: ${payload.playerAddress}`
-      );
-      return;
-    }
-
-    const currentStreak = Math.max(1, existing ? toNumber(existing.current_streak) : 1);
-    const longestStreak = Math.max(currentStreak, existing ? toNumber(existing.longest_streak) : 0);
-    const lastCompletedDay = Math.max(payload.periodId, existing ? toNumber(existing.last_completed_day) : 0);
-    const protectorsAvailable = existing ? toNumber(existing.protectors_available) : 0;
-    const effective = calculateEffectiveStreak({
-      currentStreak,
-      lastCompletedDay,
-      protectorsAvailable,
-    });
-
-    const { data, error } = await supabase
-      .from('player_streaks')
-      .update({
-        username,
-        current_streak: currentStreak,
-        effective_streak: effective.effectiveStreak,
-        longest_streak: longestStreak,
-        last_completed_day: lastCompletedDay,
-        protectors_available: protectorsAvailable,
-        protectors_needed: effective.protectorsNeeded,
-        days_missed: effective.daysMissed,
-        is_protected: effective.isProtected,
-        is_broken: effective.isBroken,
-        sync_status: 'confirmed',
-        pending_period_id: null,
-        pending_mission_id: null,
-        pending_template_id: null,
-        last_tx_hash: result.transactionHash ?? null,
-        last_synced_at: new Date().toISOString(),
-      })
-      .eq('player_address', payload.playerAddress)
-      .eq('pending_period_id', payload.periodId)
-      .select('*')
-      .maybeSingle();
-
-    if (error) {
-      if (isMissingSupabaseTable(error)) {
-        return;
-      }
-      throw error;
-    }
-
-    if (!data) {
-      const { error: upsertError } = await supabase.from('player_streaks').upsert(
-        {
-          player_address: payload.playerAddress,
-          username,
-          current_streak: currentStreak,
-          effective_streak: effective.effectiveStreak,
-          longest_streak: longestStreak,
-          last_completed_day: lastCompletedDay,
-          protectors_available: protectorsAvailable,
-          protectors_needed: effective.protectorsNeeded,
-          days_missed: effective.daysMissed,
-          is_protected: effective.isProtected,
-          is_broken: effective.isBroken,
-          sync_status: 'confirmed',
-          pending_period_id: null,
-          pending_mission_id: null,
-          pending_template_id: null,
-          last_tx_hash: result.transactionHash ?? null,
-          last_synced_at: new Date().toISOString(),
-        },
-        { onConflict: 'player_address' }
-      );
-
-      if (upsertError && !isMissingSupabaseTable(upsertError)) {
-        throw upsertError;
-      }
-    }
+    const confirmed = await refreshDailyStreakFromChain(
+      payload.playerAddress,
+      'transaction_completed',
+      result.transactionHash
+    );
 
     await insertStreakEvent({
       playerAddress: payload.playerAddress,
@@ -451,8 +487,8 @@ export async function markDailyStreakTransactionCompleted(
       periodId: payload.periodId,
       missionId: payload.missionId,
       templateId: payload.templateId,
-      currentStreak,
-      protectorsAvailable,
+      currentStreak: toNumber(confirmed.current_streak),
+      protectorsAvailable: toNumber(confirmed.protectors_available),
       txHash: result.transactionHash,
     });
   } catch (error) {
@@ -470,23 +506,9 @@ export async function markDailyStreakTransactionFailed(
   }
 
   try {
-    const existing = await getStreakRow(payload.playerAddress);
-    const username =
-      existing && !isIgnoredStreakUsername(existing.username)
-        ? existing.username
-        : await resolveStreakUsername(payload.playerAddress);
-
-    if (!username) {
-      console.log(
-        `[StreakCache] Skipping failed streak cache for player without real username: ${payload.playerAddress}`
-      );
-      return;
-    }
-
     const { error } = await supabase
       .from('player_streaks')
       .update({
-        username,
         sync_status: 'failed',
         last_synced_at: new Date().toISOString(),
       })
@@ -507,7 +529,129 @@ export async function markDailyStreakTransactionFailed(
         error: errorMessage ?? null,
       },
     });
+
+    await refreshDailyStreakFromChain(payload.playerAddress, 'transaction_failed');
   } catch (error) {
     console.warn('[StreakCache] Could not fail daily streak cache', error);
   }
+}
+
+type ReconciliationIntent = {
+  id: string;
+  status: string;
+  payload: Record<string, unknown>;
+};
+
+export function shouldReconcileDailyStreakRow(input: {
+  syncStatus: StreakSyncStatus;
+  updatedAt?: string | null;
+  intentStatus?: string | null;
+  now?: number;
+  staleAfterMs?: number;
+}): boolean {
+  if (input.syncStatus === 'confirmed') {
+    return false;
+  }
+
+  if (input.syncStatus === 'failed') {
+    return true;
+  }
+
+  if (input.intentStatus === 'processing' || input.intentStatus === 'submitted' || input.intentStatus === 'pending') {
+    return false;
+  }
+
+  const updatedAt = Date.parse(input.updatedAt ?? '');
+  const staleAfterMs = input.staleAfterMs ?? 2 * 60 * 1000;
+  const isStale = !Number.isFinite(updatedAt) || (input.now ?? Date.now()) - updatedAt >= staleAfterMs;
+  return isStale;
+}
+
+async function findReconciliationIntent(row: PlayerStreakRow): Promise<ReconciliationIntent | null> {
+  if (row.pending_intent_id) {
+    const { data, error } = await supabase
+      .from('torii_worker_intent_queue')
+      .select('id, status, payload')
+      .eq('id', row.pending_intent_id)
+      .maybeSingle();
+    if (error) {
+      throw error;
+    }
+    return data as ReconciliationIntent | null;
+  }
+
+  const periodId = toNumber(row.pending_period_id);
+  const { data, error } = await supabase
+    .from('torii_worker_intent_queue')
+    .select('id, status, payload')
+    .eq('operation', 'xp.mission_completed')
+    .contains('payload', { periodId })
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) {
+    throw error;
+  }
+
+  return ((data ?? []) as ReconciliationIntent[]).find(intent => {
+    try {
+      return normalizeStarknetAddress(String(intent.payload.player ?? '')) === row.player_address;
+    } catch {
+      return false;
+    }
+  }) ?? null;
+}
+
+export async function reconcileDailyStreakCache(): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    return;
+  }
+
+  const { data, error } = await supabase
+    .from('player_streaks')
+    .select('*')
+    .in('sync_status', ['pending', 'failed'])
+    .order('updated_at', { ascending: true })
+    .limit(100);
+
+  if (error) {
+    if (!isMissingSupabaseTable(error)) {
+      console.warn('[StreakCache] Could not inspect stale streak rows', error);
+    }
+    return;
+  }
+
+  for (const row of (data ?? []) as PlayerStreakRow[]) {
+    try {
+      const intent = await findReconciliationIntent(row);
+      if (!shouldReconcileDailyStreakRow({
+        syncStatus: row.sync_status,
+        updatedAt: row.updated_at,
+        intentStatus: intent?.status,
+      })) {
+        continue;
+      }
+
+      await refreshDailyStreakFromChain(
+        row.player_address,
+        `periodic_reconciliation:${intent?.status ?? 'missing_intent'}`
+      );
+    } catch (reconciliationError) {
+      console.warn('[StreakCache] Could not reconcile streak row', reconciliationError);
+    }
+  }
+}
+
+export function startDailyStreakReconciler(
+  intervalMs = 60_000
+): () => void {
+  if (!isSupabaseConfigured()) {
+    return () => undefined;
+  }
+
+  void reconcileDailyStreakCache();
+  const timer = setInterval(() => {
+    void reconcileDailyStreakCache();
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
 }

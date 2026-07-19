@@ -12,7 +12,10 @@ import {
   resolveWorkerGameContext,
   shouldLogWorkerGame,
 } from './services/workerGameFilter.js';
-import { markDailyStreakPending } from './services/streakCacheService.js';
+import {
+  prepareDailyStreakPending,
+  type DailyStreakPendingMutation,
+} from './services/streakCacheService.js';
 import {
   assertToriiEventCheckpointStorage,
   loadToriiEventCheckpoint,
@@ -383,7 +386,7 @@ function withWorkerLogsSuppressed(transaction: EnqueueTransactionParams): Enqueu
 
 async function enqueueTransactions(
   transactions: EnqueueTransactionParams[],
-  options: { log?: boolean } = {}
+  options: { log?: boolean; dailyStreak?: DailyStreakPendingMutation } = {}
 ): Promise<void> {
   const shouldLog = options.log !== false;
 
@@ -394,9 +397,18 @@ async function enqueueTransactions(
     return;
   }
 
+  let attachedDailyStreak = false;
   for (const transaction of transactions) {
     const transactionToEnqueue = shouldLog ? transaction : withWorkerLogsSuppressed(transaction);
-    await txQueue.enqueue(transactionToEnqueue, { log: shouldLog });
+    const dailyStreak: DailyStreakPendingMutation | undefined =
+      !attachedDailyStreak && transaction.operation === 'xp.mission_completed'
+        ? options.dailyStreak
+        : undefined;
+    await txQueue.enqueue(transactionToEnqueue, {
+      log: shouldLog,
+      dailyStreak,
+    });
+    attachedDailyStreak ||= Boolean(dailyStreak);
   }
 }
 
@@ -607,8 +619,6 @@ async function handleMissionCompleted(event: MissionCompletedEventData, options:
   }
 
   try {
-    await markDailyStreakPending(event);
-
     if (event.periodType === 'daily' && event.gameId > 0) {
       const sourceBlockchain = (await resolveWorkerGameContext(event.gameId)).blockchain;
       if (shouldLog) {
@@ -626,7 +636,13 @@ async function handleMissionCompleted(event: MissionCompletedEventData, options:
       selectedBlockchain => getBlockchainEventHandler(selectedBlockchain).buildMissionCompletedTransactions(event),
       { log: shouldLog }
     );
-    await enqueueTransactions(transactions, { log: shouldLog });
+    const dailyStreak = transactions.some(transaction => transaction.operation === 'xp.mission_completed')
+      ? await prepareDailyStreakPending(event)
+      : null;
+    await enqueueTransactions(transactions, {
+      log: shouldLog,
+      dailyStreak: dailyStreak ?? undefined,
+    });
     logTransactionBuildResult('Mission completed', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error queueing mission XP transaction:', error);
@@ -641,7 +657,7 @@ async function handleMissionCompleted(event: MissionCompletedEventData, options:
 async function handleCurrentHand(gameId: number, cards: number[]) {
   try {
     // Check if Supabase is configured
-    if (!env.SUPABASE_URL || !env.SUPABASE_ANON_KEY) {
+    if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
       if (shouldLogWorkerGame(gameId)) {
         logWorkerLine('event', {
           type: 'current_hand',

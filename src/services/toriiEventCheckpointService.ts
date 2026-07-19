@@ -67,7 +67,7 @@ function shouldReplaceCheckpoint(
 export async function loadToriiEventCheckpoint(checkpointKey: string): Promise<ToriiEventCheckpoint | null> {
   if (!isSupabaseConfigured()) {
     throw new Error(
-      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_ANON_KEY'
+      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY'
     );
   }
 
@@ -97,7 +97,7 @@ export async function loadToriiEventCheckpoint(checkpointKey: string): Promise<T
 export async function assertToriiEventCheckpointStorage(): Promise<void> {
   if (!isSupabaseConfigured()) {
     throw new Error(
-      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_ANON_KEY'
+      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY'
     );
   }
 
@@ -118,7 +118,7 @@ export async function assertToriiEventCheckpointStorage(): Promise<void> {
 export async function saveToriiEventCheckpoint(input: SaveToriiEventCheckpointInput): Promise<void> {
   if (!isSupabaseConfigured()) {
     throw new Error(
-      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_ANON_KEY'
+      '[torii-checkpoint] storage=supabase required=true missing=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY'
     );
   }
 

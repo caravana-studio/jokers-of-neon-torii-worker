@@ -8,9 +8,11 @@ import { getAllCronJobs } from './modules/cron-jobs/index.js';
 import { getPackDistributionCronJobs } from './modules/packs/packDistributionJobs.js';
 import { startToriiWorker } from './main.js';
 import { startGameAgentModule, stopGameAgentModule } from './modules/agent/GameAgentModule.js';
+import { startDailyStreakReconciler } from './services/streakCacheService.js';
 
 let scheduler: JobScheduler | null = null;
 let stopTorii: (() => void) | null = null;
+let stopStreakReconciler: (() => void) | null = null;
 
 export async function bootstrap(): Promise<void> {
   console.log(
@@ -27,6 +29,7 @@ export async function bootstrap(): Promise<void> {
 
   if (env.TRANSACTION_QUEUE_ENABLED) {
     await getTransactionQueue().initialize();
+    stopStreakReconciler = startDailyStreakReconciler();
   } else {
     console.log('[startup] queue=disabled');
   }
@@ -50,6 +53,8 @@ export async function bootstrap(): Promise<void> {
 }
 
 export async function shutdown(): Promise<void> {
+  stopStreakReconciler?.();
+  stopStreakReconciler = null;
   await stopGameAgentModule();
   scheduler?.stop();
   stopTorii?.();

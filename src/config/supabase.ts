@@ -4,22 +4,19 @@ import { env } from '../env.js';
 let client: SupabaseClient | null = null;
 
 export function isSupabaseConfigured(): boolean {
-  return Boolean(
-    env.SUPABASE_URL &&
-    (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)
-  );
+  return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
 export function getSupabase(): SupabaseClient {
   if (!isSupabaseConfigured()) {
     throw new Error(
-      'Supabase is not configured (SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY)'
+      'Supabase is not configured (SUPABASE_URL and server-only SUPABASE_SERVICE_ROLE_KEY are required)'
     );
   }
   if (!client) {
     client = createClient(
       env.SUPABASE_URL,
-      env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY,
+      env.SUPABASE_SERVICE_ROLE_KEY,
       {
         auth: {
           persistSession: false,
@@ -33,7 +30,7 @@ export function getSupabase(): SupabaseClient {
 
 if (!isSupabaseConfigured()) {
   console.warn(
-    `[supabase] configured=false queueMemoryOnly=${env.TRANSACTION_QUEUE_ENABLED} required=SUPABASE_URL+(SUPABASE_SERVICE_ROLE_KEY|SUPABASE_ANON_KEY)`
+    `[supabase] configured=false queueMemoryOnly=${env.TRANSACTION_QUEUE_ENABLED} required=SUPABASE_URL+SUPABASE_SERVICE_ROLE_KEY`
   );
 }
 

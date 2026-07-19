@@ -4,6 +4,7 @@ import { executeIntent, isRegisteredBlockchain } from './blockchainAdapters/inde
 import {
   markDailyStreakTransactionCompleted,
   markDailyStreakTransactionFailed,
+  type DailyStreakPendingMutation,
 } from './services/streakCacheService.js';
 import {
   isTransactionOperation,
@@ -19,6 +20,7 @@ const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
 
 interface QueueLogOptions {
   log?: boolean;
+  dailyStreak?: DailyStreakPendingMutation;
 }
 
 function shouldLogMetadata(metadata: Record<string, unknown> | undefined): boolean {
@@ -75,7 +77,7 @@ export class TransactionQueue {
     // Check if Supabase is configured
     this.useSupabase = this.enabled && !!(
       env.SUPABASE_URL &&
-      (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)
+      env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     if (!this.enabled) {
@@ -187,22 +189,26 @@ export class TransactionQueue {
 
     if (this.useSupabase) {
       try {
-        // Save to Supabase
-        const { error } = await supabase
-          .from(INTENT_QUEUE_TABLE)
-          .insert({
-            id,
-            blockchain: params.blockchain,
-            operation: params.operation,
-            target_ref: params.targetRef ?? null,
-            payload: params.payload,
-            intent_version: params.intentVersion ?? 1,
-            metadata: params.metadata ?? {},
-            ordering_key: deriveOrderingKey(params),
-            status: 'pending',
-            retries: 0,
-            max_retries: maxRetries,
-          });
+        const intentRow = {
+          id,
+          blockchain: params.blockchain,
+          operation: params.operation,
+          target_ref: params.targetRef ?? null,
+          payload: params.payload,
+          intent_version: params.intentVersion ?? 1,
+          metadata: params.metadata ?? {},
+          ordering_key: deriveOrderingKey(params),
+          status: 'pending',
+          retries: 0,
+          max_retries: maxRetries,
+        };
+        const { error } = options.dailyStreak
+          ? await supabase.rpc('enqueue_daily_streak_intent', {
+              p_intent: intentRow,
+              p_streak: options.dailyStreak.streak,
+              p_event: options.dailyStreak.event,
+            })
+          : await supabase.from(INTENT_QUEUE_TABLE).insert(intentRow);
 
         if (error) throw error;
 
