@@ -47,12 +47,23 @@ function shouldReplaceCheckpoint(
     return true;
   }
 
-  if (next.lastEventId && next.lastEventId === current.lastEventId) {
-    return Boolean(next.lastCursor) && !current.lastCursor;
-  }
-
   const currentTime = current.lastExecutedAt ? Date.parse(current.lastExecutedAt) : 0;
   const nextTime = next.lastExecutedAt ? Date.parse(next.lastExecutedAt) : 0;
+
+  // Torii event messages are mutable entities. A game keeps the same event
+  // message id while CurrentHand, MissionCompleted and PlayWin models are
+  // appended to it, and GraphQL returns a new cursor/executed_at for that same
+  // id. Treat that as checkpoint progress instead of pinning the checkpoint to
+  // the first version of the entity forever.
+  if (next.lastEventId && next.lastEventId === current.lastEventId) {
+    if (nextTime > currentTime) {
+      return true;
+    }
+
+    return nextTime === currentTime
+      && Boolean(next.lastCursor)
+      && next.lastCursor !== current.lastCursor;
+  }
 
   if (nextTime > currentTime) {
     return true;

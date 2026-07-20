@@ -1113,6 +1113,15 @@ export async function startToriiWorker() {
     source: 'live' | 'catchup' | 'checkpoint_init',
     cursor: string | null = null
   ): Promise<void> => {
+    // The live gRPC message has no GraphQL cursor. Advancing the durable
+    // checkpoint with it would discard the last resumable cursor and force a
+    // full id scan on the next reconciliation. The GraphQL catch-up runs after
+    // subscribing and periodically, so it remains the authoritative durable
+    // checkpoint while the live stream is only the low-latency path.
+    if (source === 'live' && !cursor) {
+      return;
+    }
+
     const checkpointInput = eventMessageToCheckpointInput(
       item,
       checkpointKey,
