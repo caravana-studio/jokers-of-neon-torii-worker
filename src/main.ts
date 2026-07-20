@@ -47,6 +47,7 @@ const TORII_EVENT_MODELS = [
 const TORII_GRAPHQL_CATCHUP_LIMIT = 100;
 const TORII_GRAPHQL_TIMEOUT_MS = 15_000;
 const TORII_RECONNECT_DELAY_MS = 2_000;
+const TORII_PERIODIC_CATCHUP_INTERVAL_MS = 2_000;
 const TORII_CATCHUP_RETRY_MAX_DELAY_MS = 60_000;
 const MAX_SEEN_TORII_EVENTS = 5_000;
 const TORII_LISTENER_NAME = 'core-events';
@@ -1086,6 +1087,7 @@ export async function startToriiWorker() {
   let stopped = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let catchUpRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  let periodicCatchUpTimer: ReturnType<typeof setTimeout> | null = null;
   let catchUpAttempt = 0;
   let catchUpInFlight: Promise<void> | null = null;
   let activeSubscription: unknown = null;
@@ -1302,13 +1304,15 @@ export async function startToriiWorker() {
       before = nextBefore;
     }
 
-    logWorkerLine('torii', {
-      action: 'checkpoint_catchup',
-      reason,
-      count: eventCount,
-      pages: pageCount,
-      checkpointEventId: checkpoint.lastEventId,
-    });
+    if (reason !== 'periodic' || eventCount > 0) {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup',
+        reason,
+        count: eventCount,
+        pages: pageCount,
+        checkpointEventId: checkpoint.lastEventId,
+      });
+    }
   };
 
   const runCatchUp = async (reason: string): Promise<void> => {
@@ -1382,6 +1386,27 @@ export async function startToriiWorker() {
         scheduleCatchUpRetry(reason, retryError);
       });
     }, delayMs);
+  };
+
+  const schedulePeriodicCatchUp = (): void => {
+    if (stopped || periodicCatchUpTimer) {
+      return;
+    }
+
+    periodicCatchUpTimer = setTimeout(() => {
+      periodicCatchUpTimer = null;
+      void runCatchUp('periodic')
+        .catch(error => {
+          logWorkerLine('torii', {
+            action: 'periodic_catchup_failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+          scheduleCatchUpRetry('periodic', error);
+        })
+        .finally(() => {
+          schedulePeriodicCatchUp();
+        });
+    }, TORII_PERIODIC_CATCHUP_INTERVAL_MS);
   };
 
   const cancelSubscription = (subscription: unknown): void => {
@@ -1522,6 +1547,7 @@ export async function startToriiWorker() {
   }
 
   await connectSubscription('startup');
+  schedulePeriodicCatchUp();
 
   logWorkerLine('torii', {
     action: 'listener_ready',
@@ -1538,6 +1564,10 @@ export async function startToriiWorker() {
     if (catchUpRetryTimer) {
       clearTimeout(catchUpRetryTimer);
       catchUpRetryTimer = null;
+    }
+    if (periodicCatchUpTimer) {
+      clearTimeout(periodicCatchUpTimer);
+      periodicCatchUpTimer = null;
     }
     logWorkerLine('torii', { action: 'subscription_cancel' });
     cancelSubscription(activeSubscription);
