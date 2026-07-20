@@ -1,4 +1,4 @@
-import { shortString } from 'starknet';
+import { CallData, shortString, uint256 } from 'starknet';
 import { env } from '../env.js';
 import type { BlockchainAdapter } from './types.js';
 import {
@@ -255,6 +255,27 @@ export function compileStarknetIntent(intent: QueuedIntent): QueuedTransaction {
           asString(payload.profileXpLow, 'payload.profileXpLow'),
           asString(payload.profileXpHigh, 'payload.profileXpHigh'),
         ]
+      );
+    }
+
+    case 'nft.transfer': {
+      const from = asString(payload.from, 'payload.from');
+      const to = asString(payload.to, 'payload.to');
+      const tokenId = BigInt(asString(payload.tokenId, 'payload.tokenId'));
+
+      if (tokenId < 0n || tokenId >= (1n << 256n)) {
+        throw new Error('Expected payload.tokenId to fit in a u256');
+      }
+
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.NFT_CONTRACT_ADDRESS, 'NFT_CONTRACT_ADDRESS'),
+        'transfer_from',
+        CallData.compile({
+          from,
+          to,
+          token_id: uint256.bnToUint256(tokenId),
+        })
       );
     }
 
