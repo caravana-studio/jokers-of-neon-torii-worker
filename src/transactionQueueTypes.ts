@@ -46,6 +46,7 @@ export interface EnqueueTransactionParams {
   blockchain: BlockchainId;
   operation: TransactionOperation;
   targetRef?: string;
+  idempotencyKey?: string;
   payload: Record<string, unknown>;
   intentVersion?: number;
   metadata?: Record<string, unknown>;

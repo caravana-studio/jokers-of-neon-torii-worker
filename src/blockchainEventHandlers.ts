@@ -51,6 +51,27 @@ export interface BlockchainEventHandler {
   buildProgressionUpdatedTransactions(event: ProgressionGameUpdateEventData): Promise<EnqueueTransactionParams[]>;
 }
 
+function normalizeEventPlayerAddress(player: string): string {
+  try {
+    return `0x${BigInt(player).toString(16).padStart(64, '0')}`;
+  } catch {
+    return player.trim().toLowerCase();
+  }
+}
+
+export function getMissionCompletedIdempotencyKey(
+  event: MissionCompletedEventData
+): string {
+  return [
+    'mission-completed-v2',
+    normalizeEventPlayerAddress(event.player),
+    event.periodTypeId,
+    event.periodId,
+    event.missionId,
+    event.templateId,
+  ].join(':');
+}
+
 function hasStarknetWriteConfig(...contractAddresses: string[]): boolean {
   return !!(
     hasStarknetTransactionExecutor() &&
@@ -189,6 +210,7 @@ const starknetEventHandler: BlockchainEventHandler = {
         blockchain: 'starknet',
         operation: 'xp.mission_completed',
         targetRef: 'xp_system',
+        idempotencyKey: getMissionCompletedIdempotencyKey(event),
         payload: {
           player: event.player,
           periodType: event.periodType,

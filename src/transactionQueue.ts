@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { supabase } from './config/supabase.js';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { executeIntent, isRegisteredBlockchain } from './blockchainAdapters/index.js';
@@ -60,6 +61,18 @@ function deriveOrderingKey(params: EnqueueTransactionParams): string | null {
   }
 
   return null;
+}
+
+export function deriveIntentId(params: EnqueueTransactionParams): string {
+  if (params.idempotencyKey) {
+    const digest = createHash('sha256')
+      .update(`${params.blockchain}\0${params.operation}\0${params.idempotencyKey}`)
+      .digest('hex')
+      .slice(0, 40);
+    return `intent_${digest}`;
+  }
+
+  return `tx_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 }
 
 /**
@@ -177,7 +190,7 @@ export class TransactionQueue {
       throw new Error('Transaction queue is disabled (TRANSACTION_QUEUE_ENABLED=false)');
     }
 
-    const id = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const id = deriveIntentId(params);
     const maxRetries = params.maxRetries ?? 3;
     const shouldLog = options.log !== false && shouldLogMetadata(params.metadata);
 
@@ -202,15 +215,30 @@ export class TransactionQueue {
           retries: 0,
           max_retries: maxRetries,
         };
-        const { error } = options.dailyStreak
+        const { data, error } = options.dailyStreak
           ? await supabase.rpc('enqueue_daily_streak_intent', {
               p_intent: intentRow,
               p_streak: options.dailyStreak.streak,
               p_event: options.dailyStreak.event,
             })
-          : await supabase.from(INTENT_QUEUE_TABLE).insert(intentRow);
+          : params.idempotencyKey
+            ? await supabase
+                .from(INTENT_QUEUE_TABLE)
+                .upsert(intentRow, { onConflict: 'id', ignoreDuplicates: true })
+                .select('id')
+            : await supabase.from(INTENT_QUEUE_TABLE).insert(intentRow);
 
         if (error) throw error;
+
+        const rpcResult = options.dailyStreak && data && typeof data === 'object'
+          ? data as Record<string, unknown>
+          : null;
+        const wasDeduplicated = rpcResult?.enqueued === false ||
+          (params.idempotencyKey && Array.isArray(data) && data.length === 0);
+
+        if (shouldLog && wasDeduplicated) {
+          console.log(`[queue] deduplicated id=${id}`);
+        }
 
         // Get queue size
         const { count } = await supabase
