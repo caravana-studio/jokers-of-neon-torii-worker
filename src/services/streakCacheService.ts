@@ -396,10 +396,27 @@ function parseStreakStatusResult(result: string[]) {
   };
 }
 
+export function hasConfirmedDailyStreakPeriod(
+  status: {
+    currentStreak: number;
+    lastCompletedDay: number;
+    isBroken: boolean;
+  },
+  expectedPeriodId: number
+): boolean {
+  return (
+    expectedPeriodId > 0 &&
+    status.lastCompletedDay >= expectedPeriodId &&
+    status.currentStreak > 0 &&
+    !status.isBroken
+  );
+}
+
 async function refreshDailyStreakFromChain(
   playerAddress: string,
   reason: string,
-  txHash?: string
+  txHash?: string,
+  expectedPeriodId?: number
 ): Promise<PlayerStreakRow> {
   if (!env.BACKGROUND_STARKNET_RPC_URL || !env.XP_SYSTEM_CONTRACT_ADDRESS) {
     throw new Error('Streak reconciliation requires BACKGROUND_STARKNET_RPC_URL and XP_SYSTEM_CONTRACT_ADDRESS');
@@ -413,6 +430,15 @@ async function refreshDailyStreakFromChain(
     calldata: CallData.compile([normalizedAddress]),
   });
   const chain = parseStreakStatusResult(result);
+  if (
+    expectedPeriodId !== undefined &&
+    !hasConfirmedDailyStreakPeriod(chain, expectedPeriodId)
+  ) {
+    throw new Error(
+      `Streak chain state is stale for ${normalizedAddress}: expected period ${expectedPeriodId}, got ${chain.lastCompletedDay}`
+    );
+  }
+
   const existing = await getStreakRow(normalizedAddress);
   const username =
     existing && !isIgnoredStreakUsername(existing.username)
@@ -478,7 +504,8 @@ export async function markDailyStreakTransactionCompleted(
     const confirmed = await refreshDailyStreakFromChain(
       payload.playerAddress,
       'transaction_completed',
-      result.transactionHash
+      result.transactionHash,
+      payload.periodId
     );
 
     await insertStreakEvent({
@@ -631,9 +658,13 @@ export async function reconcileDailyStreakCache(): Promise<void> {
         continue;
       }
 
+      const pendingPeriodId = toNumber(row.pending_period_id);
+
       await refreshDailyStreakFromChain(
         row.player_address,
-        `periodic_reconciliation:${intent?.status ?? 'missing_intent'}`
+        `periodic_reconciliation:${intent?.status ?? 'missing_intent'}`,
+        undefined,
+        pendingPeriodId > 0 ? pendingPeriodId : undefined
       );
     } catch (reconciliationError) {
       console.warn('[StreakCache] Could not reconcile streak row', reconciliationError);

@@ -2,10 +2,28 @@ import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import {
   calculateEffectiveStreak,
+  hasConfirmedDailyStreakPeriod,
   shouldReconcileDailyStreakRow,
 } from './streakCacheService.js';
 
 describe('daily streak cache race recovery', () => {
+  test('does not confirm a stale RPC read for the completed period', () => {
+    assert.equal(
+      hasConfirmedDailyStreakPeriod(
+        { currentStreak: 0, lastCompletedDay: 0, isBroken: false },
+        20654
+      ),
+      false
+    );
+    assert.equal(
+      hasConfirmedDailyStreakPeriod(
+        { currentStreak: 1, lastCompletedDay: 20654, isBroken: false },
+        20654
+      ),
+      true
+    );
+  });
+
   test('keeps an active pending intent optimistic without reconciling over it', () => {
     assert.equal(
       shouldReconcileDailyStreakRow({
