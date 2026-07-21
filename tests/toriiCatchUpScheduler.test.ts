@@ -109,6 +109,91 @@ describe('ToriiCatchUpScheduler', () => {
     expect(timers.pendingDelays()).toEqual([2_000]);
   });
 
+  test('defers reconnect catch-up while exponential backoff is pending', async () => {
+    const timers = new FakeTimers();
+    const calls: string[] = [];
+    const scheduler = new ToriiCatchUpScheduler({
+      timers,
+      periodicIntervalMs: 2_000,
+      retryBaseDelayMs: 2_000,
+      retryMaxDelayMs: 60_000,
+      runCatchUp: async reason => {
+        calls.push(reason);
+        throw new Error('Torii unavailable');
+      },
+    });
+
+    scheduler.scheduleRetry('periodic', new Error('Initial failure'));
+    timers.runNext();
+    await flushAsyncWork();
+
+    expect(calls).toEqual(['retry_periodic']);
+    expect(timers.pendingDelays()).toEqual([4_000]);
+
+    const started = await scheduler.requestCatchUp('reconnect_stream_error');
+
+    expect(started).toBe(false);
+    expect(calls).toEqual(['retry_periodic']);
+    expect(timers.pendingDelays()).toEqual([4_000]);
+  });
+
+  test('schedules recovery when an immediate startup catch-up fails', async () => {
+    const timers = new FakeTimers();
+    const calls: string[] = [];
+    const scheduler = new ToriiCatchUpScheduler({
+      timers,
+      periodicIntervalMs: 2_000,
+      retryBaseDelayMs: 2_000,
+      retryMaxDelayMs: 60_000,
+      runCatchUp: async reason => {
+        calls.push(reason);
+        if (calls.length === 1) {
+          throw new Error('Startup catch-up failed');
+        }
+      },
+    });
+
+    await expect(scheduler.requestCatchUp('startup')).rejects.toThrow('Startup catch-up failed');
+    expect(timers.pendingDelays()).toEqual([2_000]);
+
+    timers.runNext();
+    await flushAsyncWork();
+
+    expect(calls).toEqual(['startup', 'retry_startup']);
+    expect(timers.pendingDelays()).toEqual([2_000]);
+  });
+
+  test('keeps scheduling when observability hooks throw', async () => {
+    const timers = new FakeTimers();
+    const scheduler = new ToriiCatchUpScheduler({
+      timers,
+      periodicIntervalMs: 2_000,
+      retryBaseDelayMs: 2_000,
+      retryMaxDelayMs: 60_000,
+      runCatchUp: async () => {
+        throw new Error('Torii unavailable');
+      },
+      onPeriodicFailure: () => {
+        throw new Error('Periodic observer failed');
+      },
+      onRetryScheduled: () => {
+        throw new Error('Retry scheduled observer failed');
+      },
+      onRetryFailure: () => {
+        throw new Error('Retry observer failed');
+      },
+    });
+
+    scheduler.start();
+    timers.runNext();
+    await flushAsyncWork();
+    expect(timers.pendingDelays()).toEqual([2_000]);
+
+    timers.runNext();
+    await flushAsyncWork();
+    expect(timers.pendingDelays()).toEqual([4_000]);
+  });
+
   test('clears periodic and retry timers when stopped', () => {
     const periodicTimers = new FakeTimers();
     const periodicScheduler = new ToriiCatchUpScheduler({

@@ -1519,15 +1519,13 @@ export async function startToriiWorker() {
     }
     logWorkerLine('torii', { action: 'subscribed', reason });
     try {
-      await runCatchUp(reason);
-      catchUpScheduler.markCatchUpSucceeded();
+      await catchUpScheduler.requestCatchUp(reason);
     } catch (error) {
       logWorkerLine('torii', {
         action: 'checkpoint_catchup_failed',
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
-      catchUpScheduler.scheduleRetry(reason, error);
     }
   }
 

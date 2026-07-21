@@ -43,7 +43,22 @@ export class ToriiCatchUpScheduler {
     this.schedulePeriodic();
   }
 
-  markCatchUpSucceeded(): void {
+  async requestCatchUp(reason: string): Promise<boolean> {
+    if (this.stopped || this.retryTimer !== null) {
+      return false;
+    }
+
+    try {
+      await this.options.runCatchUp(reason);
+      this.markCatchUpSucceeded();
+      return true;
+    } catch (error) {
+      this.scheduleRetry(reason, error);
+      throw error;
+    }
+  }
+
+  private markCatchUpSucceeded(): void {
     this.retryAttempt = 0;
     this.clearRetryTimer();
     this.schedulePeriodic();
@@ -65,17 +80,17 @@ export class ToriiCatchUpScheduler {
       this.options.retryMaxDelayMs
     );
 
-    this.options.onRetryScheduled?.({
-      reason,
-      attempt: this.retryAttempt,
-      delayMs,
-      error,
-    });
-
     this.retryTimer = this.timers.setTimeout(() => {
       this.retryTimer = null;
       void this.runRetry(reason);
     }, delayMs);
+
+    this.notify(() => this.options.onRetryScheduled?.({
+      reason,
+      attempt: this.retryAttempt,
+      delayMs,
+      error,
+    }));
   }
 
   stop(): void {
@@ -100,7 +115,7 @@ export class ToriiCatchUpScheduler {
       await this.options.runCatchUp('periodic');
       this.markCatchUpSucceeded();
     } catch (error) {
-      this.options.onPeriodicFailure?.(error);
+      this.notify(() => this.options.onPeriodicFailure?.(error));
       this.scheduleRetry('periodic', error);
     }
   }
@@ -110,8 +125,16 @@ export class ToriiCatchUpScheduler {
       await this.options.runCatchUp(`retry_${reason}`);
       this.markCatchUpSucceeded();
     } catch (error) {
-      this.options.onRetryFailure?.(reason, error);
+      this.notify(() => this.options.onRetryFailure?.(reason, error));
       this.scheduleRetry(reason, error);
+    }
+  }
+
+  private notify(callback: () => void): void {
+    try {
+      callback();
+    } catch {
+      // Observability callbacks must never alter reconciliation scheduling.
     }
   }
 
