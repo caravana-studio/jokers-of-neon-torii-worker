@@ -52,23 +52,34 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function isRetryableTransportError(error: unknown): boolean {
+export function isRetryableTransportError(error: unknown): boolean {
   const message = asError(error).message.toLowerCase();
-  return [
+  const deterministicExecutionFragments = [
+    'transaction execution error',
+    'execution_error',
+    'execution error',
+    'runresources has no remaining steps',
+  ];
+  if (deterministicExecutionFragments.some(fragment => message.includes(fragment))) {
+    return false;
+  }
+
+  const transportFragments = [
     'fetch failed',
     'network',
     'timeout',
     'timed out',
     'rate limit',
     'too many requests',
-    '429',
-    '502',
-    '503',
-    '504',
     'econn',
     'socket',
     'gateway',
-  ].some(fragment => message.includes(fragment));
+  ];
+  if (transportFragments.some(fragment => message.includes(fragment))) {
+    return true;
+  }
+
+  return /\b(?:http|status|response)[^\n]{0,40}\b(?:429|502|503|504)\b/.test(message);
 }
 
 function jsonSafe(value: unknown): unknown {
