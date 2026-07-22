@@ -69,7 +69,7 @@ export const env = {
   // Progression System Contract (Profile World - for syncing progression from core events)
   PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
 
-  // NFT contract used by account-migration transfer intents.
+  // NFT contract used by account-migration card chunk intents.
   NFT_CONTRACT_ADDRESS:
     process.env.NFT_CONTRACT_ADDRESS ||
     process.env.STARKNET_NFT_CONTRACT_ADDRESS ||
@@ -90,6 +90,11 @@ export const env = {
   STARKNET_EXECUTOR_IDS: parseExecutorIds(process.env.STARKNET_EXECUTOR_IDS),
   TRANSACTION_QUEUE_POLL_INTERVAL_MS: parsePositiveInt(process.env.TRANSACTION_QUEUE_POLL_INTERVAL_MS, 500, 30000),
   TRANSACTION_QUEUE_LEASE_MS: parsePositiveInt(process.env.TRANSACTION_QUEUE_LEASE_MS, 600000, 3600000),
+  STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS: parsePositiveInt(
+    process.env.STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS,
+    120000,
+    3600000
+  ),
 
   // Game Data API
   FULL_GAME_API_URL: process.env.FULL_GAME_API_URL || 'https://jokers-of-neon-data.vercel.app/api/full-game',
