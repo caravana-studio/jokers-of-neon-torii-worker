@@ -75,13 +75,15 @@ export class TransactionQueue {
     // Check if Supabase is configured
     this.useSupabase = this.enabled && !!(
       env.SUPABASE_URL &&
-      (env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_ANON_KEY)
+      env.SUPABASE_SERVICE_ROLE_KEY
     );
 
     if (!this.enabled) {
       console.warn('[queue] enabled=false');
     } else if (!this.useSupabase) {
-      console.warn('[queue] storage=memory warning=transactions_lost_on_restart');
+      console.warn(
+        '[queue] storage=memory warning=transactions_lost_on_restart missing=SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY'
+      );
     }
   }
 

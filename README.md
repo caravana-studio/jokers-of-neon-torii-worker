@@ -53,9 +53,10 @@ STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 BACKGROUND_STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 STARKNET_PRIVATE_KEY=0x...
 STARKNET_ADDRESS=0x...
+STARKNET_NFT_CONTRACT_ADDRESS=0x...
 
 # Parallel Starknet execution through the executor_accounts pool.
-# Apply supabase/migrations/20260716120000_add_parallel_intent_batches.sql first.
+# Apply the parallel-batches and restrict-worker-queue-access migrations first.
 # SUPABASE_SERVICE_ROLE_KEY is required and must remain server-only.
 TRANSACTION_EXECUTION_MODE=multicall
 STARKNET_BATCH_SIZE=5
