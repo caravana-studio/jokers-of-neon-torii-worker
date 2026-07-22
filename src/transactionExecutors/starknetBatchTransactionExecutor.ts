@@ -1,4 +1,10 @@
-import { Account, RpcProvider, type Call, type GetTransactionReceiptResponse } from 'starknet';
+import {
+  Account,
+  RpcProvider,
+  type Call,
+  type GetTransactionReceiptResponse,
+  type ResourceBoundsOverhead,
+} from 'starknet';
 import { compileStarknetIntent } from '../blockchainAdapters/starknetAdapter.js';
 import { env } from '../env.js';
 import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
@@ -44,8 +50,17 @@ export type StarknetBatchExecutionResult =
       retryAsBatch: boolean;
     };
 
+export const STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD = {
+  l1_gas: { max_amount: 50, max_price_per_unit: 50 },
+  l1_data_gas: { max_amount: 50, max_price_per_unit: 50 },
+  l2_gas: { max_amount: 40, max_price_per_unit: 50 },
+} satisfies ResourceBoundsOverhead;
+
 function getProvider(): RpcProvider {
-  return new RpcProvider({ nodeUrl: env.BACKGROUND_STARKNET_RPC_URL });
+  return new RpcProvider({
+    nodeUrl: env.BACKGROUND_STARKNET_RPC_URL,
+    resourceBoundsOverhead: STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD,
+  });
 }
 
 function asError(error: unknown): Error {

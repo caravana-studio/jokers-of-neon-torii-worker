@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isRetryableTransportError } from '../src/transactionExecutors/starknetBatchTransactionExecutor.js';
+import { stark } from 'starknet';
+import {
+  isRetryableTransportError,
+  STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD,
+} from '../src/transactionExecutors/starknetBatchTransactionExecutor.js';
+
+const STARKNET_MAX_L2_GAS_AMOUNT = 1_210_000_000n;
 
 test('does not treat calldata containing 503 as a transient HTTP error', () => {
   const error = new Error(
@@ -14,5 +20,26 @@ test('still treats an HTTP 503 response as transient', () => {
   assert.equal(
     isRetryableTransportError(new Error('HTTP request failed with status 503 Service Unavailable')),
     true
+  );
+});
+
+test('keeps captured NFT transfer L2 gas below the Starknet transaction limit', () => {
+  const resourceBounds = stark.toOverheadResourceBounds(
+    {
+      l2_gas_consumed: '856706960',
+      l2_gas_price: '30192947832',
+      l1_gas_consumed: '0',
+      l1_gas_price: '73773416646947',
+      l1_data_gas_consumed: '2336',
+      l1_data_gas_price: '61673927975',
+      overall_fee: '25866652620887060320',
+      unit: 'FRI',
+    },
+    STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD
+  );
+
+  assert.ok(
+    resourceBounds.l2_gas.max_amount <= STARKNET_MAX_L2_GAS_AMOUNT,
+    `L2 max amount ${resourceBounds.l2_gas.max_amount} exceeds ${STARKNET_MAX_L2_GAS_AMOUNT}`
   );
 });
