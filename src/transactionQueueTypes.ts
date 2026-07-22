@@ -10,6 +10,7 @@ export type TransactionOperation =
   | 'streak.grant_protectors'
   | 'xp.multiplier_set'
   | 'xp.test'
+  | 'xp.reset'
   | 'nft.transfer'
   | 'stats.game_created'
   | 'stats.game_won'
@@ -28,6 +29,7 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'streak.grant_protectors',
   'xp.multiplier_set',
   'xp.test',
+  'xp.reset',
   'nft.transfer',
   'stats.game_created',
   'stats.game_won',

@@ -258,6 +258,24 @@ export function compileStarknetIntent(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'xp.reset': {
+      const contractAddress = payload.contractAddress;
+      const targetContract =
+        typeof contractAddress === 'string' && contractAddress
+          ? contractAddress
+          : getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS');
+
+      return toLegacyTransaction(
+        intent,
+        targetContract,
+        'reset_xp',
+        [
+          asString(payload.address, 'payload.address'),
+          String(asNumber(payload.seasonId, 'payload.seasonId')),
+        ]
+      );
+    }
+
     case 'nft.transfer': {
       const from = asString(payload.from, 'payload.from');
       const to = asString(payload.to, 'payload.to');
