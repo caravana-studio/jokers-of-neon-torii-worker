@@ -10,6 +10,7 @@ Aplicar primero:
 
 ```text
 supabase/migrations/20260716120000_add_parallel_intent_batches.sql
+supabase/migrations/20260722191000_restrict_worker_queue_access.sql
 ```
 
 Configuración recomendada para la primera prueba en testnet:
@@ -80,7 +81,10 @@ Agrega las siguientes variables a tu archivo `.env`:
 # Supabase Configuration (same as jokers-of-neon-api)
 SUPABASE_URL=https://jopurrudzfwcwbgqjzcs.supabase.co
 SUPABASE_ANON_KEY=your_supabase_anon_key_here
+SUPABASE_SERVICE_ROLE_KEY=server-only-secret
 ```
+
+La cola y los batches están cerrados a `anon` y `authenticated`; tanto la API como el worker deben usar `SUPABASE_SERVICE_ROLE_KEY` para operarlos.
 
 ### 2. Crear Tabla en Supabase
 

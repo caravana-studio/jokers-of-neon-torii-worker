@@ -23,7 +23,7 @@ test('still treats an HTTP 503 response as transient', () => {
   );
 });
 
-test('keeps captured NFT transfer L2 gas below the Starknet transaction limit', () => {
+test('keeps captured legacy NFT transfer L2 gas below the Starknet transaction limit', () => {
   const resourceBounds = stark.toOverheadResourceBounds(
     {
       l2_gas_consumed: '856706960',

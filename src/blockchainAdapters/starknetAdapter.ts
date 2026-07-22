@@ -65,6 +65,36 @@ function asNumberArray(value: unknown, label: string): number[] {
   return value.map((item, index) => asNumber(item, `${label}[${index}]`));
 }
 
+function asU256Array(value: unknown, label: string): bigint[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`Expected ${label} to be a non-empty array`);
+  }
+
+  const seen = new Set<string>();
+
+  return value.map((item, index) => {
+    const text = asString(item, `${label}[${index}]`);
+
+    if (!/^(?:0x[0-9a-fA-F]+|[0-9]+)$/.test(text)) {
+      throw new Error(`Expected ${label}[${index}] to be an unsigned integer string`);
+    }
+
+    const parsed = BigInt(text);
+
+    if (parsed >= (1n << 256n)) {
+      throw new Error(`Expected ${label}[${index}] to fit in a u256`);
+    }
+
+    const normalized = parsed.toString();
+    if (seen.has(normalized)) {
+      throw new Error(`Expected ${label} to contain unique token ids`);
+    }
+
+    seen.add(normalized);
+    return parsed;
+  });
+}
+
 function getRequiredContractAddress(value: string, label: string): string {
   if (!value) {
     throw new Error(`Missing Starknet contract configuration: ${label}`);
@@ -276,23 +306,19 @@ export function compileStarknetIntent(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
-    case 'nft.transfer': {
+    case 'nft.migrate_cards': {
       const from = asString(payload.from, 'payload.from');
       const to = asString(payload.to, 'payload.to');
-      const tokenId = BigInt(asString(payload.tokenId, 'payload.tokenId'));
-
-      if (tokenId < 0n || tokenId >= (1n << 256n)) {
-        throw new Error('Expected payload.tokenId to fit in a u256');
-      }
+      const tokenIds = asU256Array(payload.tokenIds, 'payload.tokenIds');
 
       return toLegacyTransaction(
         intent,
         getRequiredContractAddress(env.NFT_CONTRACT_ADDRESS, 'NFT_CONTRACT_ADDRESS'),
-        'transfer_from',
+        'migrate_cards',
         CallData.compile({
           from,
           to,
-          token_id: uint256.bnToUint256(tokenId),
+          token_ids: tokenIds.map((tokenId) => uint256.bnToUint256(tokenId)),
         })
       );
     }

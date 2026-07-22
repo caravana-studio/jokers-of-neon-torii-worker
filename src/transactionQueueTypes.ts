@@ -11,7 +11,7 @@ export type TransactionOperation =
   | 'xp.multiplier_set'
   | 'xp.test'
   | 'xp.reset'
-  | 'nft.transfer'
+  | 'nft.migrate_cards'
   | 'stats.game_created'
   | 'stats.game_won'
   | 'stats.player'
@@ -30,7 +30,7 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'xp.multiplier_set',
   'xp.test',
   'xp.reset',
-  'nft.transfer',
+  'nft.migrate_cards',
   'stats.game_created',
   'stats.game_won',
   'stats.player',
