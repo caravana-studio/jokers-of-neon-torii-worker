@@ -1,5 +1,6 @@
 import {
   Account,
+  BlockTag,
   RpcProvider,
   type Call,
   type GetTransactionReceiptResponse,
@@ -148,6 +149,25 @@ export async function inspectStarknetTransaction(
   } catch (error) {
     return { status: 'unknown', error: asError(error).message };
   }
+}
+
+export interface StarknetAccountNonceState {
+  latest: bigint;
+  preConfirmed: bigint;
+}
+
+export async function getStarknetAccountNonceState(
+  address: string
+): Promise<StarknetAccountNonceState> {
+  const provider = getProvider();
+  const [latest, preConfirmed] = await Promise.all([
+    provider.getNonceForAddress(address, BlockTag.LATEST),
+    provider.getNonceForAddress(address, BlockTag.PRE_CONFIRMED),
+  ]);
+  return {
+    latest: BigInt(latest),
+    preConfirmed: BigInt(preConfirmed),
+  };
 }
 
 export async function executeStarknetIntentBatch(

@@ -22,6 +22,7 @@ STARKNET_BATCH_WAIT_TIME_MS=1000
 STARKNET_MAX_CONCURRENT_BATCHES=6
 TRANSACTION_QUEUE_POLL_INTERVAL_MS=500
 TRANSACTION_QUEUE_LEASE_MS=600000
+STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS=120000
 SUPABASE_SERVICE_ROLE_KEY=server-only-secret
 ```
 
@@ -29,7 +30,7 @@ SUPABASE_SERVICE_ROLE_KEY=server-only-secret
 
 `STARKNET_MAX_CONCURRENT_BATCHES=0` activa drain mode: no toma batches Starknet nuevos, pero continúa reconciliando los hashes ya enviados. Usarlo antes de un rollback a `sequential`.
 
-El claim de executor, la creación del batch y el cambio de estado de los intents ocurren dentro de una función PostgreSQL con `FOR UPDATE SKIP LOCKED`. Un executor sólo mantiene un batch en vuelo. El hash se persiste como `submitted` antes de esperar el receipt; los hashes inconclusos se reconcilian sin reenviar automáticamente.
+El claim de executor, la creación del batch y el cambio de estado de los intents ocurren dentro de una función PostgreSQL con `FOR UPDATE SKIP LOCKED`. Un executor sólo mantiene un batch en vuelo. El hash se persiste como `submitted` antes de esperar el receipt. Si queda `unknown`, después de `STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS` se comparan los nonces `latest` y `pre_confirmed`: sólo se reencola cuando ambos confirman que el nonce sigue libre; los casos ambiguos quedan `failed` para revisión y el executor se libera. Una señal explícita de eviction se procesa inmediatamente.
 
 Si un multicall revierte, sus intents se liberan con `force_single=true` para aislar las calls individualmente. Slot y Celo se ejecutan en lanes separadas y no quedan bloqueadas por una confirmación Starknet.
 
@@ -69,6 +70,7 @@ Para insertar 200 registros sin ejecución on-chain, usar `STRESS_TEST_MODE=data
 ### 4. Recuperación Automática
 - ✅ Al iniciar, recupera transacciones que estaban siendo procesadas
 - ✅ Retoma transacciones pendientes automáticamente
+- ✅ Reconcilia hashes `unknown` o evictados sin bloquear indefinidamente el executor
 - ✅ No se pierden transacciones en caso de crash
 
 ## Configuración

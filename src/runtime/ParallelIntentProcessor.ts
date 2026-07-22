@@ -9,9 +9,15 @@ import {
 } from '../services/streakCacheService.js';
 import {
   executeStarknetIntentBatch,
+  getStarknetAccountNonceState,
   inspectStarknetTransaction,
   type StarknetBatchExecutorAccount,
 } from '../transactionExecutors/starknetBatchTransactionExecutor.js';
+import {
+  classifySubmittedNonce,
+  hasExplicitMempoolEviction,
+  isSubmittedBatchRecoveryDue,
+} from './submittedBatchRecovery.js';
 import type {
   BlockchainId,
   QueuedIntent,
@@ -31,8 +37,12 @@ interface ClaimedStarknetBatch {
 interface StoredBatchRow {
   id: string;
   executor_id: number;
+  executor_address: string;
   transaction_ids: string[];
   transaction_hash: string | null;
+  nonce: string | null;
+  submitted_at: string | null;
+  error_message: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -357,6 +367,7 @@ export class ParallelIntentProcessor {
         completed_at: completedAt,
         lease_owner: null,
         lease_expires_at: null,
+        error_message: null,
       })
       .eq('batch_id', batchId)
       .in('status', ['processing', 'submitted']);
@@ -531,6 +542,51 @@ export class ParallelIntentProcessor {
     );
   }
 
+  private async quarantineSubmittedBatch(
+    batch: StoredBatchRow,
+    intents: QueuedIntent[],
+    reason: string
+  ): Promise<void> {
+    const completedAt = new Date().toISOString();
+    const { error: intentError } = await supabase
+      .from(INTENT_QUEUE_TABLE)
+      .update({
+        status: 'failed',
+        completed_at: completedAt,
+        lease_owner: null,
+        lease_expires_at: null,
+        error_message: reason,
+      })
+      .eq('batch_id', batch.id)
+      .eq('status', 'submitted');
+    if (intentError) {
+      throw intentError;
+    }
+
+    await this.releaseExecutor(batch.executor_id, batch.id, false, reason);
+
+    const { error: batchError } = await supabase
+      .from(BATCH_TABLE)
+      .update({
+        status: 'failed',
+        completed_at: completedAt,
+        error_message: reason,
+      })
+      .eq('id', batch.id)
+      .eq('status', 'submitted');
+    if (batchError) {
+      throw batchError;
+    }
+
+    for (const intent of intents) {
+      await markDailyStreakTransactionFailed(intent, reason);
+    }
+
+    console.error(
+      `[parallel-queue] batch_quarantined id=${batch.id} hash=${compact(batch.transaction_hash ?? '')} reason=${reason}`
+    );
+  }
+
   private async releaseExecutor(
     executorId: number,
     batchId: string,
@@ -561,7 +617,9 @@ export class ParallelIntentProcessor {
 
     const { data, error } = await supabase
       .from(BATCH_TABLE)
-      .select('id, executor_id, transaction_ids, transaction_hash')
+      .select(
+        'id, executor_id, executor_address, transaction_ids, transaction_hash, nonce, submitted_at, error_message'
+      )
       .eq('status', 'submitted')
       .order('submitted_at', { ascending: true })
       .limit(20);
@@ -580,6 +638,61 @@ export class ParallelIntentProcessor {
 
       const inspection = await inspectStarknetTransaction(batch.transaction_hash);
       if (inspection.status === 'unknown') {
+        if (!isSubmittedBatchRecoveryDue({
+          submittedAt: batch.submitted_at,
+          errorMessage: batch.error_message,
+          timeoutMs: env.STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS,
+        })) {
+          continue;
+        }
+
+        if (!batch.nonce || !batch.executor_address) {
+          const intents = await this.loadIntents(batch.transaction_ids);
+          await this.quarantineSubmittedBatch(
+            batch,
+            intents,
+            `Submitted transaction remained unknown without nonce metadata: ${inspection.error ?? 'receipt unavailable'}`
+          );
+          continue;
+        }
+
+        let currentNonce: Awaited<ReturnType<typeof getStarknetAccountNonceState>>;
+        try {
+          currentNonce = await getStarknetAccountNonceState(batch.executor_address);
+        } catch (nonceError) {
+          console.warn(
+            `[parallel-queue] submitted_nonce_check_failed id=${batch.id} hash=${compact(batch.transaction_hash)} error=${nonceError instanceof Error ? nonceError.message : String(nonceError)}`
+          );
+          continue;
+        }
+
+        const explicitlyEvicted = hasExplicitMempoolEviction(batch.error_message);
+        const nonceDecision = classifySubmittedNonce(
+          batch.nonce,
+          currentNonce,
+          explicitlyEvicted
+        );
+
+        const intents = await this.loadIntents(batch.transaction_ids);
+        const recoveryReason =
+          `Submitted transaction remained unknown after mempool/receipt timeout; ` +
+          `submittedNonce=${batch.nonce} latestNonce=0x${currentNonce.latest.toString(16)} ` +
+          `preConfirmedNonce=0x${currentNonce.preConfirmed.toString(16)} ` +
+          `explicitlyEvicted=${explicitlyEvicted} inspection=${inspection.error ?? 'unknown'}`;
+
+        if (nonceDecision === 'retry') {
+          console.warn(
+            `[parallel-queue] submitted_requeue id=${batch.id} hash=${compact(batch.transaction_hash)} nonce=${batch.nonce}`
+          );
+          await this.failBatch(
+            batch.id,
+            batch.executor_id,
+            intents,
+            recoveryReason
+          );
+        } else {
+          await this.quarantineSubmittedBatch(batch, intents, recoveryReason);
+        }
         continue;
       }
 
