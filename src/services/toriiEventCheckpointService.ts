@@ -1,4 +1,5 @@
 import { isSupabaseConfigured, supabase } from '../config/supabase.js';
+import { shouldReplaceToriiEventCheckpoint } from './toriiEventCheckpointPolicy.js';
 
 const CHECKPOINT_TABLE = 'torii_worker_event_checkpoints';
 
@@ -37,31 +38,6 @@ function fromRow(row: Record<string, unknown>): ToriiEventCheckpoint {
       ? row.metadata as Record<string, unknown>
       : {},
   };
-}
-
-function shouldReplaceCheckpoint(
-  current: ToriiEventCheckpoint | null,
-  next: SaveToriiEventCheckpointInput
-): boolean {
-  if (!current) {
-    return true;
-  }
-
-  if (next.lastEventId && next.lastEventId === current.lastEventId) {
-    return Boolean(next.lastCursor) && !current.lastCursor;
-  }
-
-  const currentTime = current.lastExecutedAt ? Date.parse(current.lastExecutedAt) : 0;
-  const nextTime = next.lastExecutedAt ? Date.parse(next.lastExecutedAt) : 0;
-
-  if (nextTime > currentTime) {
-    return true;
-  }
-
-  // Multiple Torii events can share the same second-level executed_at. The
-  // caller processes catch-up pages oldest to newest, so allow same-second
-  // advancement instead of comparing opaque event ids.
-  return nextTime === currentTime && Boolean(next.lastEventId || next.lastCursor);
 }
 
 export async function loadToriiEventCheckpoint(checkpointKey: string): Promise<ToriiEventCheckpoint | null> {
@@ -124,7 +100,7 @@ export async function saveToriiEventCheckpoint(input: SaveToriiEventCheckpointIn
 
   const current = memoryCheckpoints.get(input.checkpointKey)
     ?? await loadToriiEventCheckpoint(input.checkpointKey);
-  if (!shouldReplaceCheckpoint(current, input)) {
+  if (!shouldReplaceToriiEventCheckpoint(current, input)) {
     return;
   }
 

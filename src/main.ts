@@ -19,6 +19,12 @@ import {
   saveToriiEventCheckpoint,
   type ToriiEventCheckpoint,
 } from './services/toriiEventCheckpointService.js';
+import { ToriiCatchUpScheduler } from './services/toriiCatchUpScheduler.js';
+import {
+  shouldLogEmptyCheckpointInitialization,
+  shouldPersistToriiEventCheckpoint,
+  type ToriiEventCheckpointSource,
+} from './services/toriiEventCheckpointPolicy.js';
 import { getSlotToriiUrl, getSlotChainId } from './config/slotConfig.js';
 import { getWorldAddress } from './config/manifest.js';
 import {
@@ -47,6 +53,7 @@ const TORII_EVENT_MODELS = [
 const TORII_GRAPHQL_CATCHUP_LIMIT = 100;
 const TORII_GRAPHQL_TIMEOUT_MS = 15_000;
 const TORII_RECONNECT_DELAY_MS = 2_000;
+const TORII_PERIODIC_CATCHUP_INTERVAL_MS = 2_000;
 const TORII_CATCHUP_RETRY_MAX_DELAY_MS = 60_000;
 const MAX_SEEN_TORII_EVENTS = 5_000;
 const TORII_LISTENER_NAME = 'core-events';
@@ -1085,8 +1092,6 @@ export async function startToriiWorker() {
   } | null = null;
   let stopped = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let catchUpRetryTimer: ReturnType<typeof setTimeout> | null = null;
-  let catchUpAttempt = 0;
   let catchUpInFlight: Promise<void> | null = null;
   let activeSubscription: unknown = null;
 
@@ -1108,9 +1113,18 @@ export async function startToriiWorker() {
 
   const saveCheckpointForEvent = async (
     item: GrpcEventMessage,
-    source: 'live' | 'catchup' | 'checkpoint_init',
+    source: ToriiEventCheckpointSource,
     cursor: string | null = null
   ): Promise<void> => {
+    // The live gRPC message has no GraphQL cursor. Advancing the durable
+    // checkpoint with it would discard the last resumable cursor and force a
+    // full id scan on the next reconciliation. The GraphQL catch-up runs after
+    // subscribing and periodically, so it remains the authoritative durable
+    // checkpoint while the live stream is only the low-latency path.
+    if (!shouldPersistToriiEventCheckpoint(source, cursor)) {
+      return;
+    }
+
     const checkpointInput = eventMessageToCheckpointInput(
       item,
       checkpointKey,
@@ -1184,7 +1198,9 @@ export async function startToriiWorker() {
     const latestEdge = page.edges[0];
 
     if (!latestEdge) {
-      logWorkerLine('torii', { action: 'checkpoint_init', reason, result: 'empty' });
+      if (shouldLogEmptyCheckpointInitialization(reason)) {
+        logWorkerLine('torii', { action: 'checkpoint_init', reason, result: 'empty' });
+      }
       return;
     }
 
@@ -1302,23 +1318,20 @@ export async function startToriiWorker() {
       before = nextBefore;
     }
 
-    logWorkerLine('torii', {
-      action: 'checkpoint_catchup',
-      reason,
-      count: eventCount,
-      pages: pageCount,
-      checkpointEventId: checkpoint.lastEventId,
-    });
+    if (reason !== 'periodic' || eventCount > 0) {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup',
+        reason,
+        count: eventCount,
+        pages: pageCount,
+        checkpointEventId: checkpoint.lastEventId,
+      });
+    }
   };
 
   const runCatchUp = async (reason: string): Promise<void> => {
     if (catchUpInFlight) {
       return catchUpInFlight;
-    }
-
-    if (catchUpRetryTimer) {
-      clearTimeout(catchUpRetryTimer);
-      catchUpRetryTimer = null;
     }
 
     const catchUpTask = (async () => {
@@ -1339,7 +1352,6 @@ export async function startToriiWorker() {
       }
 
       await catchUpFromCheckpoint(reason);
-      catchUpAttempt = 0;
     })();
 
     catchUpInFlight = catchUpTask;
@@ -1352,37 +1364,34 @@ export async function startToriiWorker() {
     }
   };
 
-  const scheduleCatchUpRetry = (reason: string, error: unknown): void => {
-    if (stopped || catchUpRetryTimer) {
-      return;
-    }
-
-    catchUpAttempt += 1;
-    const delayMs = Math.min(
-      TORII_RECONNECT_DELAY_MS * 2 ** Math.min(catchUpAttempt - 1, 10),
-      TORII_CATCHUP_RETRY_MAX_DELAY_MS
-    );
-
-    logWorkerLine('torii', {
-      action: 'checkpoint_catchup_retry_scheduled',
-      reason,
-      attempt: catchUpAttempt,
-      delayMs,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    catchUpRetryTimer = setTimeout(() => {
-      catchUpRetryTimer = null;
-      void runCatchUp(`retry_${reason}`).catch(retryError => {
-        logWorkerLine('torii', {
-          action: 'checkpoint_catchup_retry_failed',
-          reason,
-          error: retryError instanceof Error ? retryError.message : String(retryError),
-        });
-        scheduleCatchUpRetry(reason, retryError);
+  const catchUpScheduler = new ToriiCatchUpScheduler({
+    runCatchUp,
+    periodicIntervalMs: TORII_PERIODIC_CATCHUP_INTERVAL_MS,
+    retryBaseDelayMs: TORII_RECONNECT_DELAY_MS,
+    retryMaxDelayMs: TORII_CATCHUP_RETRY_MAX_DELAY_MS,
+    onPeriodicFailure: error => {
+      logWorkerLine('torii', {
+        action: 'periodic_catchup_failed',
+        error: error instanceof Error ? error.message : String(error),
       });
-    }, delayMs);
-  };
+    },
+    onRetryScheduled: ({ reason, attempt, delayMs, error }) => {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup_retry_scheduled',
+        reason,
+        attempt,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onRetryFailure: (reason, retryError) => {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup_retry_failed',
+        reason,
+        error: retryError instanceof Error ? retryError.message : String(retryError),
+      });
+    },
+  });
 
   const cancelSubscription = (subscription: unknown): void => {
     try {
@@ -1499,7 +1508,7 @@ export async function startToriiWorker() {
             source: 'live',
             error: error instanceof Error ? error.message : String(error),
           });
-          scheduleCatchUpRetry('live_processing_failed', error);
+          catchUpScheduler.scheduleRetry('live_processing_failed', error);
         });
       },
       [worldAddress]
@@ -1510,18 +1519,18 @@ export async function startToriiWorker() {
     }
     logWorkerLine('torii', { action: 'subscribed', reason });
     try {
-      await runCatchUp(reason);
+      await catchUpScheduler.requestCatchUp(reason);
     } catch (error) {
       logWorkerLine('torii', {
         action: 'checkpoint_catchup_failed',
         reason,
         error: error instanceof Error ? error.message : String(error),
       });
-      scheduleCatchUpRetry(reason, error);
     }
   }
 
   await connectSubscription('startup');
+  catchUpScheduler.start();
 
   logWorkerLine('torii', {
     action: 'listener_ready',
@@ -1535,10 +1544,7 @@ export async function startToriiWorker() {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
-    if (catchUpRetryTimer) {
-      clearTimeout(catchUpRetryTimer);
-      catchUpRetryTimer = null;
-    }
+    catchUpScheduler.stop();
     logWorkerLine('torii', { action: 'subscription_cancel' });
     cancelSubscription(activeSubscription);
     activeSubscription = null;
