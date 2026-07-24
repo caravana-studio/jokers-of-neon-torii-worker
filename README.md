@@ -12,7 +12,7 @@ Replaces separate deploys of `jokers-of-neon-torii-worker`, `jokers-of-neon-cron
 
 # Jokers of Neon - Event Listener
 
-Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón del ejemplo [dojo.js/example-node-worker](https://github.com/dojoengine/dojo.js/tree/main/examples/example-node-worker).
+Bot para escuchar eventos de Torii mediante el cliente gRPC oficial de Dojo.
 
 ## Características
 
@@ -21,7 +21,8 @@ Bot para escuchar eventos `MissionCompletedEvent` desde Torii usando el patrón 
 - ✅ Modo solo lectura (sin ejecutar transacciones)
 - ✅ Modo ejecución (ejecuta transacciones en Starknet)
 - ✅ Soporte multi-chain para encolar y ejecutar escrituras en Celo
-- ✅ Basado en el SDK oficial de Dojo.js
+- ✅ Suscripción gRPC compatible con Torii 1.8
+- ✅ Backfill automático y deduplicación por modelo de evento
 
 ## Instalación
 
@@ -48,8 +49,23 @@ MANIFEST_SLOT_ENV=dev
 
 # Opcional (para ejecutar transacciones)
 STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
+# Opcional: RPC separado para worker/background. Si no se define, usa STARKNET_RPC_URL.
+BACKGROUND_STARKNET_RPC_URL=https://starknet-sepolia.public.blastapi.io
 STARKNET_PRIVATE_KEY=0x...
 STARKNET_ADDRESS=0x...
+STARKNET_NFT_CONTRACT_ADDRESS=0x...
+
+# Parallel Starknet execution through the executor_accounts pool.
+# Apply the parallel-batches and restrict-worker-queue-access migrations first.
+# SUPABASE_SERVICE_ROLE_KEY is required and must remain server-only.
+TRANSACTION_EXECUTION_MODE=multicall
+STARKNET_BATCH_SIZE=5
+STARKNET_BATCH_WAIT_TIME_MS=1000
+STARKNET_MAX_CONCURRENT_BATCHES=6
+# Optional: limit which executor_accounts IDs are eligible for this worker.
+# STARKNET_EXECUTOR_IDS=1,2,3,4,5,6
+TRANSACTION_QUEUE_POLL_INTERVAL_MS=500
+TRANSACTION_QUEUE_LEASE_MS=600000
 
 # Opcional (para ejecutar escrituras EVM en Celo)
 # En este worker Celo siempre usa mainnet.
@@ -100,6 +116,19 @@ Si configuras `STARKNET_PRIVATE_KEY` y las demás variables de Starknet:
 - Muestra los eventos en la consola
 - **Ejecuta transacciones** en Starknet para procesar recompensas
 
+Con `TRANSACTION_EXECUTION_MODE=multicall`, Starknet deja de usar la cuenta fija
+y compila los mismos intents semánticos en multicalls. Cada cuenta activa de
+`executor_accounts` procesa como máximo un batch a la vez. Slot y Celo usan
+lanes independientes y no bloquean las confirmaciones de Starknet.
+
+Para rollback operativo, usa `TRANSACTION_EXECUTION_MODE=sequential` y conserva
+`STARKNET_PRIVATE_KEY`/`STARKNET_ADDRESS`.
+
+Antes de cambiar a `sequential`, usa temporalmente
+`STARKNET_MAX_CONCURRENT_BATCHES=0` para dejar de tomar batches nuevos y espera
+a que no queden batches `processing` o `submitted`. El plan de deploy, stress y
+rollback está en [docs/PARALLEL_TRANSACTION_ROLLOUT.md](docs/PARALLEL_TRANSACTION_ROLLOUT.md).
+
 ## Estructura del Proyecto
 
 ```
@@ -138,7 +167,7 @@ Si tienes acceso al proyecto de Cairo/Dojo, puedes generar los schemas TypeScrip
 [config] slot env=testnet slot=jokers-testnet-sepolia rpc=https://api.cartridge.gg/x/jokers-testnet-sepolia/katana
 [config] manifest env=testnet world=0x...
 [queue] ready pending=0
-[torii] action=listener_ready events=MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate
+[torii] action=listener_ready transport=grpc events=MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate
 [event] type=current_hand game=1234 cards=[1,2,3,4,5] chain=slot
 [game-step] saved game=1234 step=7
 ```
@@ -151,6 +180,7 @@ Asegúrate de que `MANIFEST_SLOT_ENV` esté configurado en tu `.env` y que el se
 ### El bot no escucha eventos
 - Verifica que `MANIFEST_SLOT_ENV` apunte al entorno correcto (`dev`, `prods3` u otro alias válido presente en `version.json`)
 - Revisa los logs de startup para confirmar que Torii URL y World Address se resolvieron correctamente
+- Confirma que aparezca `action=listener_ready transport=grpc`
 - Asegúrate de que el modelo de evento esté correctamente nombrado en el código
 
 ## Referencias

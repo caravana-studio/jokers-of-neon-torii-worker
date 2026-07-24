@@ -1,10 +1,11 @@
 import cron from 'node-cron';
+import type { ScheduledTask } from 'node-cron';
 import type { CronJobDefinition, IntervalJobDefinition } from './types.js';
 
 const DEFAULT_CRON_TIMEZONE = 'UTC';
 
 export class JobScheduler {
-  private cronTasks: cron.ScheduledTask[] = [];
+  private cronTasks: ScheduledTask[] = [];
   private intervalHandles: ReturnType<typeof setInterval>[] = [];
   private runningCronJobs = new Set<string>();
   private runningIntervalJobs = new Set<string>();

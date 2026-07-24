@@ -1,4 +1,4 @@
-import { env } from './env.js';
+import { env, hasStarknetTransactionExecutor } from './env.js';
 import {
   getGameData,
   getGameSpecials,
@@ -53,9 +53,7 @@ export interface BlockchainEventHandler {
 
 function hasStarknetWriteConfig(...contractAddresses: string[]): boolean {
   return !!(
-    env.STARKNET_PRIVATE_KEY &&
-    env.STARKNET_RPC_URL &&
-    env.STARKNET_ADDRESS &&
+    hasStarknetTransactionExecutor() &&
     contractAddresses.every(Boolean)
   );
 }

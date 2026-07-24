@@ -1,4 +1,4 @@
-import { shortString } from 'starknet';
+import { CallData, shortString, uint256 } from 'starknet';
 import { env } from '../env.js';
 import type { BlockchainAdapter } from './types.js';
 import {
@@ -65,6 +65,36 @@ function asNumberArray(value: unknown, label: string): number[] {
   return value.map((item, index) => asNumber(item, `${label}[${index}]`));
 }
 
+function asU256Array(value: unknown, label: string): bigint[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`Expected ${label} to be a non-empty array`);
+  }
+
+  const seen = new Set<string>();
+
+  return value.map((item, index) => {
+    const text = asString(item, `${label}[${index}]`);
+
+    if (!/^(?:0x[0-9a-fA-F]+|[0-9]+)$/.test(text)) {
+      throw new Error(`Expected ${label}[${index}] to be an unsigned integer string`);
+    }
+
+    const parsed = BigInt(text);
+
+    if (parsed >= (1n << 256n)) {
+      throw new Error(`Expected ${label}[${index}] to fit in a u256`);
+    }
+
+    const normalized = parsed.toString();
+    if (seen.has(normalized)) {
+      throw new Error(`Expected ${label} to contain unique token ids`);
+    }
+
+    seen.add(normalized);
+    return parsed;
+  });
+}
+
 function getRequiredContractAddress(value: string, label: string): string {
   if (!value) {
     throw new Error(`Missing Starknet contract configuration: ${label}`);
@@ -123,7 +153,7 @@ function toLegacyTransaction(
   };
 }
 
-function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
+export function compileStarknetIntent(intent: QueuedIntent): QueuedTransaction {
   const payload = intent.payload;
 
   switch (intent.operation) {
@@ -258,6 +288,41 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       );
     }
 
+    case 'xp.reset': {
+      const contractAddress = payload.contractAddress;
+      const targetContract =
+        typeof contractAddress === 'string' && contractAddress
+          ? contractAddress
+          : getRequiredContractAddress(env.XP_SYSTEM_CONTRACT_ADDRESS, 'XP_SYSTEM_CONTRACT_ADDRESS');
+
+      return toLegacyTransaction(
+        intent,
+        targetContract,
+        'reset_xp',
+        [
+          asString(payload.address, 'payload.address'),
+          String(asNumber(payload.seasonId, 'payload.seasonId')),
+        ]
+      );
+    }
+
+    case 'nft.migrate_cards': {
+      const from = asString(payload.from, 'payload.from');
+      const to = asString(payload.to, 'payload.to');
+      const tokenIds = asU256Array(payload.tokenIds, 'payload.tokenIds');
+
+      return toLegacyTransaction(
+        intent,
+        getRequiredContractAddress(env.NFT_CONTRACT_ADDRESS, 'NFT_CONTRACT_ADDRESS'),
+        'migrate_cards',
+        CallData.compile({
+          from,
+          to,
+          token_ids: tokenIds.map((tokenId) => uint256.bnToUint256(tokenId)),
+        })
+      );
+    }
+
     case 'stats.game_created': {
       const player = asString(payload.player, 'payload.player');
       return toLegacyTransaction(
@@ -322,7 +387,7 @@ export const starknetAdapter: BlockchainAdapter = {
         return await executeSlotQueueTransaction(buildSlotTransaction(intent));
       }
 
-      return await executeStarknetQueueTransaction(buildLegacyTransaction(intent));
+      return await executeStarknetQueueTransaction(compileStarknetIntent(intent));
     } catch (error) {
       return {
         success: false,

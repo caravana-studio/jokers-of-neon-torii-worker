@@ -10,6 +10,8 @@ export type TransactionOperation =
   | 'streak.grant_protectors'
   | 'xp.multiplier_set'
   | 'xp.test'
+  | 'xp.reset'
+  | 'nft.migrate_cards'
   | 'stats.game_created'
   | 'stats.game_won'
   | 'stats.player'
@@ -27,6 +29,8 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'streak.grant_protectors',
   'xp.multiplier_set',
   'xp.test',
+  'xp.reset',
+  'nft.migrate_cards',
   'stats.game_created',
   'stats.game_won',
   'stats.player',
@@ -40,7 +44,7 @@ export const SLOT_TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'missions.generate_weekly',
 ];
 
-export type TransactionStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type TransactionStatus = 'pending' | 'processing' | 'submitted' | 'completed' | 'failed';
 
 export interface EnqueueTransactionParams {
   blockchain: BlockchainId;

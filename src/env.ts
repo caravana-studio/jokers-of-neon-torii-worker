@@ -7,8 +7,37 @@ import type { BlockchainId } from './transactionQueueTypes.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Cargar variables de entorno
+// Load the repository .env before deriving any typed configuration values.
 dotenv.config({ path: resolve(__dirname, '../.env') });
+
+export type TransactionExecutionMode = 'sequential' | 'multicall';
+
+function parsePositiveInt(value: string | undefined, fallback: number, max?: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  const normalized = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return max ? Math.min(normalized, max) : normalized;
+}
+
+function parseNonNegativeInt(value: string | undefined, fallback: number, max?: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  const normalized = Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+  return max ? Math.min(normalized, max) : normalized;
+}
+
+function parseTransactionExecutionMode(value: string | undefined): TransactionExecutionMode {
+  return value?.trim().toLowerCase() === 'multicall' ? 'multicall' : 'sequential';
+}
+
+function parseExecutorIds(value: string | undefined): number[] {
+  return Array.from(new Set(
+    (value ?? '')
+      .split(',')
+      .map(item => Number.parseInt(item.trim(), 10))
+      .filter(item => Number.isInteger(item) && item > 0)
+  ));
+}
+
+const transactionExecutionMode = parseTransactionExecutionMode(process.env.TRANSACTION_EXECUTION_MODE);
 
 export const env = {
   // Slot Environment (controls which slot instance and manifest to load)
@@ -16,7 +45,7 @@ export const env = {
 
   // Starknet Configuration (Optional - for executing transactions)
   STARKNET_RPC_URL: process.env.STARKNET_RPC_URL || '',
-  STARKNET_RPC_API_KEY: process.env.STARKNET_RPC_API_KEY || '',
+  BACKGROUND_STARKNET_RPC_URL: process.env.BACKGROUND_STARKNET_RPC_URL || process.env.STARKNET_RPC_URL || '',
   STARKNET_PRIVATE_KEY: process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY || '',
   STARKNET_ADDRESS: process.env.STARKNET_ADDRESS || process.env.ADDRESS || '',
 
@@ -40,9 +69,32 @@ export const env = {
   // Progression System Contract (Profile World - for syncing progression from core events)
   PROGRESSION_SYSTEM_CONTRACT_ADDRESS: process.env.PROGRESSION_SYSTEM_CONTRACT_ADDRESS || '',
 
+  // NFT contract used by account-migration card chunk intents.
+  NFT_CONTRACT_ADDRESS:
+    process.env.NFT_CONTRACT_ADDRESS ||
+    process.env.STARKNET_NFT_CONTRACT_ADDRESS ||
+    '',
+
   // Supabase Configuration (for persistent transaction queue)
   SUPABASE_URL: process.env.SUPABASE_URL || '',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+
+  // Transaction execution. `sequential` is the safe rollback mode; enable
+  // `multicall` after applying the parallel-executor Supabase migration.
+  TRANSACTION_EXECUTION_MODE: transactionExecutionMode,
+  STARKNET_BATCH_SIZE: parsePositiveInt(process.env.STARKNET_BATCH_SIZE, 5, 20),
+  STARKNET_BATCH_WAIT_TIME_MS: parsePositiveInt(process.env.STARKNET_BATCH_WAIT_TIME_MS, 1000, 30000),
+  // Zero is a drain mode: reconcile submitted hashes without claiming new batches.
+  STARKNET_MAX_CONCURRENT_BATCHES: parseNonNegativeInt(process.env.STARKNET_MAX_CONCURRENT_BATCHES, 6, 50),
+  STARKNET_EXECUTOR_IDS: parseExecutorIds(process.env.STARKNET_EXECUTOR_IDS),
+  TRANSACTION_QUEUE_POLL_INTERVAL_MS: parsePositiveInt(process.env.TRANSACTION_QUEUE_POLL_INTERVAL_MS, 500, 30000),
+  TRANSACTION_QUEUE_LEASE_MS: parsePositiveInt(process.env.TRANSACTION_QUEUE_LEASE_MS, 600000, 3600000),
+  STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS: parsePositiveInt(
+    process.env.STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS,
+    120000,
+    3600000
+  ),
 
   // Game Data API
   FULL_GAME_API_URL: process.env.FULL_GAME_API_URL || 'https://jokers-of-neon-data.vercel.app/api/full-game',
@@ -50,7 +102,10 @@ export const env = {
   // Event Listener Mode
   // Si STARKNET_PRIVATE_KEY está configurado, ejecutará transacciones
   // Si no, solo escuchará eventos (modo solo lectura)
-  READONLY_MODE: !(process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY),
+  READONLY_MODE:
+    transactionExecutionMode === 'multicall'
+      ? !(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
+      : !(process.env.STARKNET_PRIVATE_KEY || process.env.PRIVATE_KEY),
 
   // Pack Distribution Configuration
   PACK_DISTRIBUTION_ENABLED: process.env.PACK_DISTRIBUTION_ENABLED === 'true',
@@ -95,11 +150,67 @@ export const env = {
 
 };
 
+function describeRpcEndpoint(rawUrl: string): string {
+  if (!rawUrl) {
+    return 'missing';
+  }
+
+  try {
+    const url = new URL(rawUrl);
+    const segments = url.pathname
+      .split('/')
+      .filter(Boolean)
+    const [first, second] = segments;
+
+    if (first === 'v2') {
+      return `${url.hostname}/v2/[redacted]`;
+    }
+
+    if (first === 'starknet' && second === 'version') {
+      return `${url.hostname}/starknet/version`;
+    }
+
+    if (first) {
+      return `${url.hostname}/${first}${segments.length > 1 ? '/...' : ''}`;
+    }
+
+    return url.hostname;
+  } catch {
+    return rawUrl.length > 40 ? `${rawUrl.slice(0, 24)}...` : rawUrl;
+  }
+}
+
+function logBackgroundRpcSelection(): void {
+  const configuredBackgroundRpc = process.env.BACKGROUND_STARKNET_RPC_URL?.trim() || '';
+  const configuredDefaultRpc = process.env.STARKNET_RPC_URL?.trim() || '';
+  const source = configuredBackgroundRpc
+    ? 'BACKGROUND_STARKNET_RPC_URL'
+    : configuredDefaultRpc
+      ? 'STARKNET_RPC_URL'
+      : 'none';
+  const mode = !env.BACKGROUND_STARKNET_RPC_URL
+    ? 'missing'
+    : configuredBackgroundRpc
+      ? configuredBackgroundRpc === configuredDefaultRpc
+        ? 'background-same-as-default'
+        : 'dedicated-background'
+      : 'default-fallback';
+
+  console.log(
+    `[env] starknet_rpc role=background mode=${mode} source=${source} endpoint=${describeRpcEndpoint(env.BACKGROUND_STARKNET_RPC_URL)}`
+  );
+}
+
 // Validar configuración requerida
 function validateConfig() {
-  // Advertir si no está en modo solo lectura pero faltan configuraciones de Starknet
-  if (!env.READONLY_MODE) {
-    const starknetRequired = ['STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'XP_SYSTEM_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS'];
+  logBackgroundRpcSelection();
+
+  // Multicall is explicitly selected and must fail visibly if its server-side
+  // executor configuration is incomplete. Sequential can remain read-only.
+  if (env.TRANSACTION_EXECUTION_MODE === 'multicall' || !env.READONLY_MODE) {
+    const starknetRequired = env.TRANSACTION_EXECUTION_MODE === 'multicall'
+      ? ['BACKGROUND_STARKNET_RPC_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'XP_SYSTEM_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS']
+      : ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_PRIVATE_KEY', 'STARKNET_ADDRESS', 'XP_SYSTEM_CONTRACT_ADDRESS', 'PROFILE_SYSTEM_CONTRACT_ADDRESS'];
     const starknetMissing = starknetRequired.filter(key => !env[key as keyof typeof env]);
 
     if (starknetMissing.length > 0) {
@@ -129,6 +240,18 @@ function validateConfig() {
 }
 
 validateConfig();
+
+export function hasStarknetTransactionExecutor(): boolean {
+  if (!env.BACKGROUND_STARKNET_RPC_URL) {
+    return false;
+  }
+
+  if (env.TRANSACTION_EXECUTION_MODE === 'multicall') {
+    return Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY);
+  }
+
+  return Boolean(env.STARKNET_ADDRESS && env.STARKNET_PRIVATE_KEY);
+}
 
 export function getWorkerBlockchainFilter(): BlockchainId[] | null {
   const values = env.WORKER_BLOCKCHAIN_FILTER

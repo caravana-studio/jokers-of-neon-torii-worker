@@ -1,6 +1,4 @@
-import { w3cwebsocket } from 'websocket';
-import { init } from '@dojoengine/sdk/node';
-import { HistoricalToriiQueryBuilder } from '@dojoengine/sdk/node';
+import { ToriiGrpcClient } from '@dojoengine/grpc';
 import { num, shortString } from 'starknet';
 import { env, getWorkerBlockchainFilter } from './env.js';
 import { getTransactionQueue } from './transactionQueue.js';
@@ -15,7 +13,19 @@ import {
   shouldLogWorkerGame,
 } from './services/workerGameFilter.js';
 import { markDailyStreakPending } from './services/streakCacheService.js';
-import { getSlotToriiUrl, getSlotRelayUrl } from './config/slotConfig.js';
+import {
+  assertToriiEventCheckpointStorage,
+  loadToriiEventCheckpoint,
+  saveToriiEventCheckpoint,
+  type ToriiEventCheckpoint,
+} from './services/toriiEventCheckpointService.js';
+import { ToriiCatchUpScheduler } from './services/toriiCatchUpScheduler.js';
+import {
+  shouldLogEmptyCheckpointInitialization,
+  shouldPersistToriiEventCheckpoint,
+  type ToriiEventCheckpointSource,
+} from './services/toriiEventCheckpointPolicy.js';
+import { getSlotToriiUrl, getSlotChainId } from './config/slotConfig.js';
 import { getWorldAddress } from './config/manifest.js';
 import {
   getAllBlockchainEventHandlers,
@@ -25,17 +35,330 @@ import {
 } from './blockchainEventHandlers.js';
 import type { BlockchainId, EnqueueTransactionParams } from './transactionQueueTypes.js';
 
-// Configuración necesaria para WebSocket en Node.js
-// @ts-ignore
-global.WebSocket = w3cwebsocket;
-// @ts-ignore
-global.WorkerGlobalScope = global;
-
 // Initialize transaction queue
 const txQueue = getTransactionQueue();
 
 const workerBlockchainFilter = getWorkerBlockchainFilter();
 const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
+const TORII_EVENT_MODELS = [
+  'jokers_of_neon_core-MissionCompletedEvent',
+  'jokers_of_neon_core-MissionCompletedV2Event',
+  'jokers_of_neon_core-CreateGameEvent',
+  'jokers_of_neon_core-CurrentHandEvent',
+  'jokers_of_neon_core-PlayWinGameEvent',
+  'jokers_of_neon_core-PlayGameOverEvent',
+  'jokers_of_neon_core-LevelPassedEvent',
+  'jokers_of_neon_core-ProgressionGameUpdateEvent',
+] as const;
+const TORII_GRAPHQL_CATCHUP_LIMIT = 100;
+const TORII_GRAPHQL_TIMEOUT_MS = 15_000;
+const TORII_RECONNECT_DELAY_MS = 2_000;
+const TORII_PERIODIC_CATCHUP_INTERVAL_MS = 2_000;
+const TORII_CATCHUP_RETRY_MAX_DELAY_MS = 60_000;
+const MAX_SEEN_TORII_EVENTS = 5_000;
+const TORII_LISTENER_NAME = 'core-events';
+const CORE_NAMESPACE = 'jokers_of_neon_core';
+const CORE_TYPENAME_PREFIX = `${CORE_NAMESPACE}_`;
+const TORII_EVENT_MODEL_SET = new Set<string>(TORII_EVENT_MODELS);
+
+type GrpcEventMessage = {
+  hashed_keys?: string;
+  created_at?: number;
+  updated_at?: number;
+  executed_at?: number;
+  world_address?: string;
+  models?: Record<string, unknown>;
+};
+
+type GraphqlEventModel = Record<string, unknown> & { __typename?: string };
+
+type GraphqlEventEdge = {
+  cursor: string;
+  node: {
+    id: string;
+    executedAt: string | null;
+    models: GraphqlEventModel[];
+  };
+};
+
+type GraphqlEventPage = {
+  edges: GraphqlEventEdge[];
+  pageInfo: {
+    hasNextPage?: boolean;
+    hasPreviousPage?: boolean;
+    startCursor?: string | null;
+    endCursor?: string | null;
+  };
+};
+
+type ToriiStreamSubscriptionOptions = {
+  createStream: () => unknown;
+  onMessage: (response: unknown) => void;
+  onError?: (error: unknown) => void;
+  onComplete?: () => void;
+};
+
+type ToriiClientWithStreamFactory = {
+  __jonSubscriptionHandlersInstalled?: boolean;
+  createStreamSubscription?: (options: ToriiStreamSubscriptionOptions) => unknown;
+};
+
+function unwrapToriiValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(unwrapToriiValue);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  if ('type' in record && 'value' in record) {
+    return unwrapToriiValue(record.value);
+  }
+
+  return Object.fromEntries(
+    Object.entries(record).map(([key, nestedValue]) => [key, unwrapToriiValue(nestedValue)])
+  );
+}
+
+export function normalizeGrpcEventMessage(item: GrpcEventMessage): Record<string, unknown> {
+  const modelsByNamespace: Record<string, Record<string, unknown>> = {};
+
+  for (const [qualifiedModelName, modelValue] of Object.entries(item.models ?? {})) {
+    const separatorIndex = qualifiedModelName.lastIndexOf('-');
+    if (separatorIndex <= 0 || separatorIndex === qualifiedModelName.length - 1) {
+      continue;
+    }
+
+    const namespace = qualifiedModelName.slice(0, separatorIndex);
+    const modelName = qualifiedModelName.slice(separatorIndex + 1);
+    modelsByNamespace[namespace] ??= {};
+    modelsByNamespace[namespace][modelName] = unwrapToriiValue(modelValue);
+  }
+
+  return {
+    ...item,
+    models: modelsByNamespace,
+  };
+}
+
+function toriiModelFingerprint(
+  item: GrpcEventMessage,
+  qualifiedModelName: string,
+  modelValue: unknown
+): string {
+  return JSON.stringify(
+    [item.world_address, item.hashed_keys, qualifiedModelName, modelValue],
+    (_key, value) => typeof value === 'bigint' ? value.toString() : value
+  );
+}
+
+function createToriiEventClause() {
+  return {
+    Keys: {
+      keys: [],
+      pattern_matching: 'VariableLen' as const,
+      models: [...TORII_EVENT_MODELS],
+    },
+  };
+}
+
+function createCheckpointKey(slotEnv: string, worldAddress: string): string {
+  return `${slotEnv}:${worldAddress.toLowerCase()}:${TORII_LISTENER_NAME}`;
+}
+
+function normalizeEventMessageId(worldAddress: string | undefined, hashedKeys: string | undefined): string | null {
+  if (!worldAddress || !hashedKeys) {
+    return null;
+  }
+
+  return `${worldAddress.toLowerCase()}:${hashedKeys.toLowerCase()}`;
+}
+
+function toIsoFromUnixSeconds(value: unknown): string | null {
+  const timestamp = typeof value === 'number'
+    ? value
+    : typeof value === 'bigint'
+      ? Number(value)
+      : undefined;
+
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp * 1000).toISOString();
+}
+
+function toQualifiedModelName(typename: string | undefined): string | null {
+  if (!typename?.startsWith(CORE_TYPENAME_PREFIX)) {
+    return null;
+  }
+
+  return `${CORE_NAMESPACE}-${typename.slice(CORE_TYPENAME_PREFIX.length)}`;
+}
+
+function eventMessageToCheckpointInput(
+  item: GrpcEventMessage,
+  checkpointKey: string,
+  slotEnv: string,
+  worldAddress: string,
+  source: string,
+  cursor: string | null = null
+) {
+  return {
+    checkpointKey,
+    slotEnv,
+    worldAddress,
+    listenerName: TORII_LISTENER_NAME,
+    lastEventId: normalizeEventMessageId(item.world_address, item.hashed_keys),
+    lastCursor: cursor,
+    lastExecutedAt: toIsoFromUnixSeconds(item.executed_at),
+    metadata: { source },
+  };
+}
+
+function graphqlEdgeToEventMessage(edge: GraphqlEventEdge, worldAddress: string): GrpcEventMessage {
+  const models: Record<string, unknown> = {};
+
+  for (const model of edge.node.models ?? []) {
+    const qualifiedModelName = toQualifiedModelName(model.__typename);
+    if (!qualifiedModelName || !TORII_EVENT_MODEL_SET.has(qualifiedModelName)) {
+      continue;
+    }
+
+    const { __typename: _typename, ...modelValue } = model;
+    models[qualifiedModelName] = modelValue;
+  }
+
+  const [, hashedKeys] = edge.node.id.split(':');
+
+  return {
+    hashed_keys: hashedKeys,
+    executed_at: edge.node.executedAt
+      ? Math.floor(Date.parse(edge.node.executedAt) / 1000)
+      : undefined,
+    world_address: worldAddress,
+    models,
+  };
+}
+
+const EVENT_MESSAGES_QUERY = `
+  query EventMessages($first: Int, $last: Int, $before: Cursor, $after: Cursor) {
+    eventMessages(first: $first, last: $last, before: $before, after: $after) {
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      edges {
+        cursor
+        node {
+          id
+          executedAt
+          models {
+            __typename
+            ... on jokers_of_neon_core_MissionCompletedEvent {
+              player
+              id
+              mission_type
+            }
+            ... on jokers_of_neon_core_MissionCompletedV2Event {
+              player
+              period_type
+              period_id
+              mission_id
+              template_id
+              difficulty
+              target
+              progress
+              xp
+              game_id
+            }
+            ... on jokers_of_neon_core_CreateGameEvent {
+              player
+              game_id
+            }
+            ... on jokers_of_neon_core_CurrentHandEvent {
+              game_id
+              cards
+            }
+            ... on jokers_of_neon_core_PlayWinGameEvent {
+              player
+              game_id
+            }
+            ... on jokers_of_neon_core_PlayGameOverEvent {
+              player
+              game_id
+            }
+            ... on jokers_of_neon_core_LevelPassedEvent {
+              player
+              game_id
+              previous_level
+              new_level
+            }
+            ... on jokers_of_neon_core_ProgressionGameUpdateEvent {
+              player
+              game_id
+              tier
+              total_runs
+              max_level
+              max_round
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+function getToriiGraphqlUrl(toriiUrl: string): string {
+  const baseUrl = toriiUrl.replace(/\/$/, '');
+  return baseUrl.endsWith('/graphql') ? baseUrl : `${baseUrl}/graphql`;
+}
+
+async function fetchEventMessagesPage(
+  toriiUrl: string,
+  options: { first?: number; last?: number; before?: string | null; after?: string | null }
+): Promise<GraphqlEventPage> {
+  if ((options.first === undefined) === (options.last === undefined)) {
+    throw new Error('Torii GraphQL pagination requires exactly one of first or last');
+  }
+
+  const response = await fetch(getToriiGraphqlUrl(toriiUrl), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(TORII_GRAPHQL_TIMEOUT_MS),
+    body: JSON.stringify({
+      query: EVENT_MESSAGES_QUERY,
+      variables: {
+        first: options.first ?? null,
+        last: options.last ?? null,
+        before: options.before ?? null,
+        after: options.after ?? null,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Torii GraphQL request failed: ${response.status}`);
+  }
+
+  const payload = await response.json() as {
+    data?: { eventMessages?: GraphqlEventPage };
+    errors?: Array<{ message?: string }>;
+  };
+
+  if (payload.errors?.length) {
+    throw new Error(`Torii GraphQL errors: ${payload.errors.map(error => error.message ?? 'unknown').join('; ')}`);
+  }
+
+  return {
+    edges: payload.data?.eventMessages?.edges ?? [],
+    pageInfo: payload.data?.eventMessages?.pageInfo ?? {},
+  };
+}
 
 function compactValue(value: unknown): string {
   if (Array.isArray(value)) {
@@ -250,9 +573,12 @@ function normalizeMissionCompletedEvent(rawEvent: unknown): MissionCompletedEven
   };
 }
 
-function shouldProcessCurrentHandEvent(gameId: number, cards: number[]): boolean {
+function currentHandEventKey(gameId: number, cards: number[]): string {
+  return `${gameId}:${cards.join(',')}`;
+}
+
+function isDuplicateCurrentHandEvent(gameId: number, cards: number[]): boolean {
   const now = Date.now();
-  const key = `${gameId}:${cards.join(',')}`;
 
   for (const [eventKey, timestamp] of recentCurrentHandEvents) {
     if (now - timestamp > CURRENT_HAND_DEDUPE_WINDOW_MS) {
@@ -260,13 +586,12 @@ function shouldProcessCurrentHandEvent(gameId: number, cards: number[]): boolean
     }
   }
 
-  const previousTimestamp = recentCurrentHandEvents.get(key);
-  if (previousTimestamp && now - previousTimestamp <= CURRENT_HAND_DEDUPE_WINDOW_MS) {
-    return false;
-  }
+  const previousTimestamp = recentCurrentHandEvents.get(currentHandEventKey(gameId, cards));
+  return Boolean(previousTimestamp && now - previousTimestamp <= CURRENT_HAND_DEDUPE_WINDOW_MS);
+}
 
-  recentCurrentHandEvents.set(key, now);
-  return true;
+function rememberCurrentHandEvent(gameId: number, cards: number[]): void {
+  recentCurrentHandEvents.set(currentHandEventKey(gameId, cards), Date.now());
 }
 
 /**
@@ -312,6 +637,7 @@ async function handleMissionCompleted(event: MissionCompletedEventData, options:
     logTransactionBuildResult('Mission completed', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error queueing mission XP transaction:', error);
+    throw error;
   }
 }
 
@@ -364,8 +690,10 @@ async function handleCurrentHand(gameId: number, cards: number[]) {
     }
 
     if (shouldLogWorkerGame(gameId)) {
-      logWorkerLine('torii', { action: 'continue_after_game_step_error', game: gameId });
+      logWorkerLine('torii', { action: 'retry_after_game_step_error', game: gameId });
     }
+
+    throw error;
   }
 }
 
@@ -394,6 +722,7 @@ async function handlePlayWinGame(
     logTransactionBuildResult('Play win game', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error recording won game:', error);
+    throw error;
   }
 }
 
@@ -422,6 +751,7 @@ async function handleGameOver(
     logTransactionBuildResult('Play game over', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error recording game over:', error);
+    throw error;
   }
 }
 
@@ -450,6 +780,7 @@ async function handleCreateGame(
     logTransactionBuildResult('Create game', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error recording game creation:', error);
+    throw error;
   }
 }
 
@@ -499,6 +830,7 @@ async function handleProgressionUpdated(
     logTransactionBuildResult('Progression updated', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error processing progression event:', error);
+    throw error;
   }
 }
 
@@ -541,33 +873,28 @@ async function handleLevelPassed(
     logTransactionBuildResult('Level passed', transactions, { log: shouldLog });
   } catch (error) {
     console.error('❌ Error adding level completion XP:', error);
+    throw error;
   }
 }
 
 export async function startToriiWorker() {
   const toriiUrl = getSlotToriiUrl();
-  const relayUrl = getSlotRelayUrl();
+  const chainId = getSlotChainId();
   const worldAddress = getWorldAddress();
+  const checkpointKey = createCheckpointKey(env.MANIFEST_SLOT_ENV, worldAddress);
 
-  logWorkerLine('torii', { action: 'config', toriiUrl, relayUrl, world: worldAddress });
-  logWorkerLine('torii', { action: 'sdk_init' });
+  await assertToriiEventCheckpointStorage();
+  logWorkerLine('torii', { action: 'checkpoint_storage_ready', storage: 'supabase' });
 
-  // Initialize SDK with example configuration
-  const sdk = await init({
-    client: {
-      toriiUrl,
-      relayUrl, // Must be in multiaddr format
-      worldAddress,
-    },
-    domain: {
-      name: 'jokers-of-neon-worker',
-      version: '1.0',
-      chainId: 'SN_SEPOLIA',
-      revision: '1',
-    },
+  logWorkerLine('torii', { action: 'config', transport: 'grpc', toriiUrl, chainId, world: worldAddress });
+  logWorkerLine('torii', { action: 'grpc_init' });
+
+  const toriiClient = new ToriiGrpcClient({
+    toriiUrl,
+    worldAddress,
   });
 
-  logWorkerLine('torii', { action: 'sdk_ready' });
+  logWorkerLine('torii', { action: 'grpc_ready' });
 
   // Callback when an event is detected
   const onEventUpdated = async (response: any) => {
@@ -637,11 +964,12 @@ export async function startToriiWorker() {
                 const gameId = Number(event.game_id);
                 const cards = Array.isArray(event.cards) ? event.cards.map(Number) : [];
 
-                if (!shouldProcessCurrentHandEvent(gameId, cards)) {
+                if (isDuplicateCurrentHandEvent(gameId, cards)) {
                   continue;
                 }
 
                 await handleCurrentHand(gameId, cards);
+                rememberCurrentHandEvent(gameId, cards);
               } else {
                 logWorkerLine('event', { type: 'current_hand', result: 'skip', reason: 'incomplete' });
               }
@@ -745,53 +1073,480 @@ export async function startToriiWorker() {
           }
         } catch (error) {
           console.error('❌ Error processing item:', error);
-          console.error(error);
+          throw error;
         }
       }
     } catch (error) {
       console.error('❌ Error in callback:', error);
+      throw error;
     }
   };
 
-  // Create query for events
-  const query = new HistoricalToriiQueryBuilder()
-    .withEntityModels([
-      'jokers_of_neon_core-MissionCompletedEvent',
-      'jokers_of_neon_core-MissionCompletedV2Event',
-      'jokers_of_neon_core-CreateGameEvent',
-      'jokers_of_neon_core-CurrentHandEvent',
-      'jokers_of_neon_core-PlayWinGameEvent',
-      'jokers_of_neon_core-PlayGameOverEvent',
-      'jokers_of_neon_core-LevelPassedEvent',
-      'jokers_of_neon_core-ProgressionGameUpdateEvent'
-    ])
-    .withDirection('Backward')
-    .withLimit(10);
+  const seenEvents = new Map<string, true>();
+  let processingChain = Promise.resolve();
+  let processingFailed = false;
+  let failedEvent: {
+    item: GrpcEventMessage;
+    source: 'live' | 'catchup';
+    cursor: string | null;
+  } | null = null;
+  let stopped = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let catchUpInFlight: Promise<void> | null = null;
+  let activeSubscription: unknown = null;
 
-  try {
-    // Get initial historical events
-    const historicalEvents = await sdk.getEventMessages({ query });
-    const items = historicalEvents.getItems();
-    logWorkerLine('torii', { action: 'historical_events', count: items.length });
-  } catch (error) {
-    console.warn('⚠️  Error retrieving historical events:', error);
+  const getModelFingerprint = (
+    item: GrpcEventMessage,
+    qualifiedModelName: string,
+    modelValue: unknown
+  ): string => toriiModelFingerprint(item, qualifiedModelName, modelValue);
+
+  const rememberModelFingerprint = (fingerprint: string): void => {
+    seenEvents.set(fingerprint, true);
+    if (seenEvents.size > MAX_SEEN_TORII_EVENTS) {
+      const oldestFingerprint = seenEvents.keys().next().value;
+      if (oldestFingerprint) {
+        seenEvents.delete(oldestFingerprint);
+      }
+    }
+  };
+
+  const saveCheckpointForEvent = async (
+    item: GrpcEventMessage,
+    source: ToriiEventCheckpointSource,
+    cursor: string | null = null
+  ): Promise<void> => {
+    // The live gRPC message has no GraphQL cursor. Advancing the durable
+    // checkpoint with it would discard the last resumable cursor and force a
+    // full id scan on the next reconciliation. The GraphQL catch-up runs after
+    // subscribing and periodically, so it remains the authoritative durable
+    // checkpoint while the live stream is only the low-latency path.
+    if (!shouldPersistToriiEventCheckpoint(source, cursor)) {
+      return;
+    }
+
+    const checkpointInput = eventMessageToCheckpointInput(
+      item,
+      checkpointKey,
+      env.MANIFEST_SLOT_ENV,
+      worldAddress,
+      source,
+      cursor
+    );
+
+    if (!checkpointInput.lastEventId && !checkpointInput.lastCursor) {
+      return;
+    }
+
+    await saveToriiEventCheckpoint(checkpointInput);
+  };
+
+  const enqueueEvent = (
+    item: GrpcEventMessage,
+    source: 'live' | 'catchup',
+    cursor: string | null = null
+  ): Promise<void> => {
+    const eventTask = processingChain
+      .then(async () => {
+        const normalizedItem = normalizeGrpcEventMessage(item);
+        const modelsByNamespace = normalizedItem.models as Record<string, Record<string, unknown>>;
+
+        // Torii event messages are cumulative: a later update can contain both
+        // the new model and models delivered previously for the same entity.
+        // Process and deduplicate each model payload independently.
+        for (const qualifiedModelName of TORII_EVENT_MODELS) {
+          const separatorIndex = qualifiedModelName.lastIndexOf('-');
+          const namespace = qualifiedModelName.slice(0, separatorIndex);
+          const modelName = qualifiedModelName.slice(separatorIndex + 1);
+          const modelValue = modelsByNamespace[namespace]?.[modelName];
+          if (modelValue === undefined) {
+            continue;
+          }
+
+          const fingerprint = getModelFingerprint(item, qualifiedModelName, modelValue);
+          if (seenEvents.has(fingerprint)) {
+            continue;
+          }
+
+          await onEventUpdated({
+            data: [{
+              ...normalizedItem,
+              models: {
+                [namespace]: {
+                  [modelName]: modelValue,
+                },
+              },
+            }],
+          });
+          rememberModelFingerprint(fingerprint);
+        }
+
+        await saveCheckpointForEvent(item, source, cursor);
+      });
+
+    processingChain = eventTask.catch(error => {
+      processingFailed = true;
+      failedEvent ??= { item, source, cursor };
+      throw error;
+    });
+
+    return processingChain;
+  };
+
+  const initializeCheckpointAtHead = async (reason: string): Promise<void> => {
+    const page = await fetchEventMessagesPage(toriiUrl, { first: 1 });
+    const latestEdge = page.edges[0];
+
+    if (!latestEdge) {
+      if (shouldLogEmptyCheckpointInitialization(reason)) {
+        logWorkerLine('torii', { action: 'checkpoint_init', reason, result: 'empty' });
+      }
+      return;
+    }
+
+    await saveCheckpointForEvent(
+      graphqlEdgeToEventMessage(latestEdge, worldAddress),
+      'checkpoint_init',
+      latestEdge.cursor
+    );
+
+    logWorkerLine('torii', {
+      action: 'checkpoint_init',
+      reason,
+      eventId: latestEdge.node.id,
+      executedAt: latestEdge.node.executedAt,
+    });
+  };
+
+  const findCursorByEventId = async (eventId: string): Promise<GraphqlEventEdge | null> => {
+    let after: string | null = null;
+
+    while (true) {
+      const page = await fetchEventMessagesPage(toriiUrl, {
+        first: TORII_GRAPHQL_CATCHUP_LIMIT,
+        after,
+      });
+
+      const match = page.edges.find(edge => edge.node.id.toLowerCase() === eventId.toLowerCase());
+      if (match) {
+        return match;
+      }
+
+      if (!page.pageInfo.hasNextPage || page.edges.length === 0) {
+        return null;
+      }
+
+      const nextAfter = page.pageInfo.endCursor ?? page.edges[page.edges.length - 1]?.cursor ?? null;
+      if (!nextAfter || nextAfter === after) {
+        throw new Error(`Torii cursor search did not advance for event ${eventId}`);
+      }
+
+      after = nextAfter;
+    }
+  };
+
+  const resolveCheckpointCursor = async (
+    checkpoint: ToriiEventCheckpoint,
+    reason: string
+  ): Promise<string> => {
+    if (checkpoint.lastCursor) {
+      return checkpoint.lastCursor;
+    }
+
+    if (!checkpoint.lastEventId) {
+      throw new Error(`Checkpoint ${checkpoint.checkpointKey} has no cursor or event id`);
+    }
+
+    const edge = await findCursorByEventId(checkpoint.lastEventId);
+    if (!edge) {
+      logWorkerLine('torii', {
+        action: 'checkpoint_cursor_missing',
+        reason,
+        eventId: checkpoint.lastEventId,
+      });
+      throw new Error(`Checkpoint event not found in Torii: ${checkpoint.lastEventId}`);
+    }
+
+    await saveCheckpointForEvent(
+      graphqlEdgeToEventMessage(edge, worldAddress),
+      'checkpoint_init',
+      edge.cursor
+    );
+
+    return edge.cursor;
+  };
+
+  const catchUpFromCheckpoint = async (reason: string): Promise<void> => {
+    const checkpoint = await loadToriiEventCheckpoint(checkpointKey);
+
+    if (!checkpoint) {
+      await initializeCheckpointAtHead(reason);
+      return;
+    }
+
+    let before = await resolveCheckpointCursor(checkpoint, reason);
+    let eventCount = 0;
+    let pageCount = 0;
+
+    while (true) {
+      const page = await fetchEventMessagesPage(toriiUrl, {
+        last: TORII_GRAPHQL_CATCHUP_LIMIT,
+        before,
+      });
+
+      if (page.edges.length === 0) {
+        break;
+      }
+
+      // With `last + before`, Torii returns the page from the checkpoint
+      // toward the head. Persisting each edge makes large catch-ups resumable.
+      for (const edge of page.edges) {
+        await enqueueEvent(graphqlEdgeToEventMessage(edge, worldAddress), 'catchup', edge.cursor);
+        eventCount += 1;
+      }
+
+      pageCount += 1;
+      if (!page.pageInfo.hasNextPage) {
+        break;
+      }
+
+      const nextBefore = page.pageInfo.endCursor ?? page.edges[page.edges.length - 1]?.cursor ?? null;
+      if (!nextBefore || nextBefore === before) {
+        throw new Error('Torii catch-up cursor did not advance');
+      }
+
+      before = nextBefore;
+    }
+
+    if (reason !== 'periodic' || eventCount > 0) {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup',
+        reason,
+        count: eventCount,
+        pages: pageCount,
+        checkpointEventId: checkpoint.lastEventId,
+      });
+    }
+  };
+
+  const runCatchUp = async (reason: string): Promise<void> => {
+    if (catchUpInFlight) {
+      return catchUpInFlight;
+    }
+
+    const catchUpTask = (async () => {
+      if (processingFailed) {
+        await processingChain.catch(() => undefined);
+        processingChain = Promise.resolve();
+        processingFailed = false;
+      }
+
+      if (failedEvent) {
+        const eventToRetry = failedEvent;
+        failedEvent = null;
+        logWorkerLine('torii', {
+          action: 'retry_failed_event',
+          source: eventToRetry.source,
+        });
+        await enqueueEvent(eventToRetry.item, eventToRetry.source, eventToRetry.cursor);
+      }
+
+      await catchUpFromCheckpoint(reason);
+    })();
+
+    catchUpInFlight = catchUpTask;
+    try {
+      await catchUpTask;
+    } finally {
+      if (catchUpInFlight === catchUpTask) {
+        catchUpInFlight = null;
+      }
+    }
+  };
+
+  const catchUpScheduler = new ToriiCatchUpScheduler({
+    runCatchUp,
+    periodicIntervalMs: TORII_PERIODIC_CATCHUP_INTERVAL_MS,
+    retryBaseDelayMs: TORII_RECONNECT_DELAY_MS,
+    retryMaxDelayMs: TORII_CATCHUP_RETRY_MAX_DELAY_MS,
+    onPeriodicFailure: error => {
+      logWorkerLine('torii', {
+        action: 'periodic_catchup_failed',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onRetryScheduled: ({ reason, attempt, delayMs, error }) => {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup_retry_scheduled',
+        reason,
+        attempt,
+        delayMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+    onRetryFailure: (reason, retryError) => {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup_retry_failed',
+        reason,
+        error: retryError instanceof Error ? retryError.message : String(retryError),
+      });
+    },
+  });
+
+  const cancelSubscription = (subscription: unknown): void => {
+    try {
+      (subscription as { cancel?: () => void } | null)?.cancel?.();
+    } catch (error) {
+      console.warn('[torii] action=subscription_cancel_failed', error);
+    }
+  };
+
+  const scheduleReconnect = (reason: string, error?: unknown): void => {
+    if (stopped || reconnectTimer) {
+      return;
+    }
+
+    logWorkerLine('torii', {
+      action: 'subscription_reconnect_scheduled',
+      reason,
+      delayMs: TORII_RECONNECT_DELAY_MS,
+      error: error instanceof Error ? error.message : error ? String(error) : undefined,
+    });
+
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      void connectSubscription(`reconnect_${reason}`).catch((reconnectError: unknown) => {
+        logWorkerLine('torii', {
+          action: 'subscription_reconnect_failed',
+          reason,
+          error: reconnectError instanceof Error ? reconnectError.message : String(reconnectError),
+        });
+        scheduleReconnect('reconnect_failed', reconnectError);
+      });
+    }, TORII_RECONNECT_DELAY_MS);
+  };
+
+  const formatSubscriptionError = (error: unknown): { message: string; code?: string } => {
+    const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+    return {
+      message: error instanceof Error ? error.message : String(error),
+      code: typeof record?.code === 'string' ? record.code : undefined,
+    };
+  };
+
+  const installToriiStreamHandlers = (): boolean => {
+    const streamClient = toriiClient as unknown as ToriiClientWithStreamFactory;
+    if (streamClient.__jonSubscriptionHandlersInstalled) {
+      return true;
+    }
+
+    const createStreamSubscription = streamClient.createStreamSubscription?.bind(streamClient);
+    if (!createStreamSubscription) {
+      return false;
+    }
+
+    streamClient.createStreamSubscription = (options: ToriiStreamSubscriptionOptions) => createStreamSubscription({
+      ...options,
+      onError: options.onError ?? ((error: unknown) => {
+        const { message, code } = formatSubscriptionError(error);
+        logWorkerLine('torii', {
+          action: 'subscription_error',
+          message,
+          code,
+        });
+        scheduleReconnect('stream_error', error);
+      }),
+      onComplete: options.onComplete ?? (() => {
+        logWorkerLine('torii', { action: 'subscription_complete' });
+        scheduleReconnect('stream_complete');
+      }),
+    });
+    streamClient.__jonSubscriptionHandlersInstalled = true;
+    return true;
+  };
+
+  const watchSubscription = (subscription: unknown): void => {
+    const stream = (subscription as { _subscription?: { stream?: unknown } } | null)?._subscription?.stream as
+      | { responses?: { onError?: (callback: (error: unknown) => void) => void; onComplete?: (callback: () => void) => void } }
+      | undefined;
+
+    stream?.responses?.onError?.((error: unknown) => {
+      const { message, code } = formatSubscriptionError(error);
+      logWorkerLine('torii', {
+        action: 'subscription_error',
+        message,
+        code,
+      });
+      scheduleReconnect('stream_error', error);
+    });
+
+    stream?.responses?.onComplete?.(() => {
+      logWorkerLine('torii', { action: 'subscription_complete' });
+      scheduleReconnect('stream_complete');
+    });
+  };
+
+  async function connectSubscription(reason: string): Promise<void> {
+    if (stopped) {
+      return;
+    }
+
+    if (activeSubscription) {
+      cancelSubscription(activeSubscription);
+      activeSubscription = null;
+    }
+
+    const hasManagedStreamHandlers = installToriiStreamHandlers();
+
+    logWorkerLine('torii', { action: 'subscribe', reason });
+    const subscription = await toriiClient.onEventMessageUpdated(
+      createToriiEventClause(),
+      (item: GrpcEventMessage) => {
+        void enqueueEvent(item, 'live').catch(error => {
+          logWorkerLine('torii', {
+            action: 'process_event_failed',
+            source: 'live',
+            error: error instanceof Error ? error.message : String(error),
+          });
+          catchUpScheduler.scheduleRetry('live_processing_failed', error);
+        });
+      },
+      [worldAddress]
+    );
+    activeSubscription = subscription;
+    if (!hasManagedStreamHandlers) {
+      watchSubscription(subscription);
+    }
+    logWorkerLine('torii', { action: 'subscribed', reason });
+    try {
+      await catchUpScheduler.requestCatchUp(reason);
+    } catch (error) {
+      logWorkerLine('torii', {
+        action: 'checkpoint_catchup_failed',
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
-  // Subscribe to real-time events
-  logWorkerLine('torii', { action: 'subscribe' });
-
-  const [, subscription] = await sdk.subscribeEventQuery({
-    query,
-    callback: onEventUpdated,
-  });
+  await connectSubscription('startup');
+  catchUpScheduler.start();
 
   logWorkerLine('torii', {
     action: 'listener_ready',
+    transport: 'grpc',
     events: 'MissionCompletedV2,CreateGame,CurrentHand,PlayWin,PlayGameOver,LevelPassed,ProgressionUpdate',
   });
 
   return () => {
+    stopped = true;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    catchUpScheduler.stop();
     logWorkerLine('torii', { action: 'subscription_cancel' });
-    subscription.cancel();
+    cancelSubscription(activeSubscription);
+    activeSubscription = null;
   };
 }

@@ -2,7 +2,52 @@
 
 ## Descripción
 
-Este sistema implementa una cola persistente para transacciones de Starknet usando Supabase como base de datos. Permite que las transacciones sobrevivan reinicios del worker y se ejecuten secuencialmente con validación.
+Este sistema implementa una cola persistente de intents multi-chain usando Supabase. En modo `sequential` mantiene el comportamiento histórico. En modo `multicall`, conserva los intents semánticos pero compila y agrupa los de Starknet para ejecutarlos en paralelo con el pool `executor_accounts`.
+
+## Modo multicall paralelo
+
+Aplicar primero:
+
+```text
+supabase/migrations/20260716120000_add_parallel_intent_batches.sql
+supabase/migrations/20260722191000_restrict_worker_queue_access.sql
+```
+
+Configuración recomendada para la primera prueba en testnet:
+
+```env
+TRANSACTION_EXECUTION_MODE=multicall
+STARKNET_BATCH_SIZE=5
+STARKNET_BATCH_WAIT_TIME_MS=1000
+STARKNET_MAX_CONCURRENT_BATCHES=6
+TRANSACTION_QUEUE_POLL_INTERVAL_MS=500
+TRANSACTION_QUEUE_LEASE_MS=600000
+STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS=120000
+SUPABASE_SERVICE_ROLE_KEY=server-only-secret
+```
+
+`STARKNET_EXECUTOR_IDS=1,2,3` limita qué cuentas puede tomar el worker; no impide que la API use esas mismas cuentas. Si se omite, el worker puede tomar cualquier cuenta activa y libre de `executor_accounts`. La propiedad de cada cuenta se coordina atómicamente entre ambos procesos.
+
+`STARKNET_MAX_CONCURRENT_BATCHES=0` activa drain mode: no toma batches Starknet nuevos, pero continúa reconciliando los hashes ya enviados. Usarlo antes de un rollback a `sequential`.
+
+El claim de executor, la creación del batch y el cambio de estado de los intents ocurren dentro de una función PostgreSQL con `FOR UPDATE SKIP LOCKED`. Un executor sólo mantiene un batch en vuelo. El hash se persiste como `submitted` antes de esperar el receipt. Si queda `unknown`, después de `STARKNET_SUBMITTED_UNKNOWN_TIMEOUT_MS` se comparan los nonces `latest` y `pre_confirmed`: sólo se reencola cuando ambos confirman que el nonce sigue libre; los casos ambiguos quedan `failed` para revisión y el executor se libera. Una señal explícita de eviction se procesa inmediatamente.
+
+Si un multicall revierte, sus intents se liberan con `force_single=true` para aislar las calls individualmente. Slot y Celo se ejecutan en lanes separadas y no quedan bloqueadas por una confirmación Starknet.
+
+### Stress test manual
+
+El preset `xp-zero` encola 200 calls `test_xp` con XP cero. Recorren el pipeline on-chain y pagan fees, pero no modifican XP:
+
+```bash
+STRESS_TEST_MODE=onchain \
+STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_ONCHAIN \
+STRESS_TEST_RUN_ID=parallel_200_01 \
+STRESS_TEST_COUNT=200 \
+STRESS_TEST_PRESET=xp-zero \
+bun run stress:queue
+```
+
+Para insertar 200 registros sin ejecución on-chain, usar `STRESS_TEST_MODE=database-only` y `STRESS_TEST_CONFIRM=I_UNDERSTAND_THIS_WRITES_DATABASE`. Ese modo no prueba el executor.
 
 ## Características
 
@@ -11,10 +56,11 @@ Este sistema implementa una cola persistente para transacciones de Starknet usan
 - ✅ Sobreviven reinicios del worker
 - ✅ Se pueden consultar y monitorear desde Supabase
 
-### 2. Procesamiento Secuencial
-- ✅ Una transacción a la vez para evitar conflictos de nonce
-- ✅ Cada transacción espera confirmación antes de continuar
-- ✅ FIFO (First In, First Out)
+### 2. Procesamiento configurable
+- ✅ Secuencial como rollback
+- ✅ Multicalls Starknet de tamaño configurable
+- ✅ Varias cuentas ejecutoras en paralelo, cada una dueña de su nonce
+- ✅ Lanes independientes para Slot y Celo
 
 ### 3. Sistema de Reintentos
 - ✅ Hasta 3 intentos por defecto (configurable)
@@ -24,6 +70,7 @@ Este sistema implementa una cola persistente para transacciones de Starknet usan
 ### 4. Recuperación Automática
 - ✅ Al iniciar, recupera transacciones que estaban siendo procesadas
 - ✅ Retoma transacciones pendientes automáticamente
+- ✅ Reconcilia hashes `unknown` o evictados sin bloquear indefinidamente el executor
 - ✅ No se pierden transacciones en caso de crash
 
 ## Configuración
@@ -36,7 +83,10 @@ Agrega las siguientes variables a tu archivo `.env`:
 # Supabase Configuration (same as jokers-of-neon-api)
 SUPABASE_URL=https://jopurrudzfwcwbgqjzcs.supabase.co
 SUPABASE_ANON_KEY=your_supabase_anon_key_here
+SUPABASE_SERVICE_ROLE_KEY=server-only-secret
 ```
+
+La cola y los batches están cerrados a `anon` y `authenticated`; tanto la API como el worker deben usar `SUPABASE_SERVICE_ROLE_KEY` para operarlos.
 
 ### 2. Crear Tabla en Supabase
 

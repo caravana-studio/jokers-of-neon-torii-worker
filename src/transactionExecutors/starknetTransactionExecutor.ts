@@ -2,15 +2,13 @@ import { Account, Call, RpcProvider } from 'starknet';
 import { env } from '../env.js';
 import type { QueuedTransaction, TransactionResult } from '../transactionQueueTypes.js';
 import { withStarknetWriteLock } from '../runtime/StarknetWriteCoordinator.js';
+import { resolveStarknetRecommendedTip } from './starknetTip.js';
 
 const rpcHealthCheckPromises = new Map<string, Promise<void>>();
 
 function getStarknetProvider(): RpcProvider {
   return new RpcProvider({
-    nodeUrl: env.STARKNET_RPC_URL,
-    headers: env.STARKNET_RPC_API_KEY
-      ? { Authorization: `Bearer ${env.STARKNET_RPC_API_KEY}` }
-      : undefined,
+    nodeUrl: env.BACKGROUND_STARKNET_RPC_URL,
   });
 }
 
@@ -69,16 +67,16 @@ export async function ensureStarknetRpcReachable(label: string, nodeUrl: string,
   return rpcHealthCheckPromises.get(cacheKey)!;
 }
 
-function getStarknetAccount(): Account {
+function getStarknetAccount(provider = getStarknetProvider()): Account {
   return new Account({
-    provider: getStarknetProvider(),
+    provider,
     address: env.STARKNET_ADDRESS,
     signer: env.STARKNET_PRIVATE_KEY,
   });
 }
 
 function ensureStarknetWriteConfig(): void {
-  const required: Array<keyof typeof env> = ['STARKNET_RPC_URL', 'STARKNET_ADDRESS', 'STARKNET_PRIVATE_KEY'];
+  const required: Array<keyof typeof env> = ['BACKGROUND_STARKNET_RPC_URL', 'STARKNET_PRIVATE_KEY', 'STARKNET_ADDRESS'];
   const missing = required.filter(key => !env[key]);
 
   if (missing.length > 0) {
@@ -93,7 +91,7 @@ function compactValue(value: string): string {
 export async function executeStarknetQueueTransaction(transaction: QueuedTransaction): Promise<TransactionResult> {
   try {
     ensureStarknetWriteConfig();
-    await ensureStarknetRpcReachable('STARKNET_RPC_URL', env.STARKNET_RPC_URL, env.STARKNET_RPC_API_KEY);
+    await ensureStarknetRpcReachable('BACKGROUND_STARKNET_RPC_URL', env.BACKGROUND_STARKNET_RPC_URL);
 
     const call: Call = {
       contractAddress: transaction.contractAddress,
@@ -105,12 +103,15 @@ export async function executeStarknetQueueTransaction(transaction: QueuedTransac
       `[executor] send chain=starknet op=${transaction.entrypoint} account=${compactValue(env.STARKNET_ADDRESS)} contract=${compactValue(call.contractAddress)}`
     );
 
-    const account = getStarknetAccount();
+    const provider = getStarknetProvider();
+    const account = getStarknetAccount(provider);
+    const tip = await resolveStarknetRecommendedTip(provider);
     const transactionHash = await withStarknetWriteLock(env.STARKNET_ADDRESS, async () => {
       const starknetNonce = await account.getNonce();
       const { transaction_hash } = await account.execute(call, {
         nonce: starknetNonce,
         skipValidate: true,
+        tip,
       });
       return transaction_hash;
     });
