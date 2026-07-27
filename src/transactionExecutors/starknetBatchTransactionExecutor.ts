@@ -57,10 +57,29 @@ export const STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD = {
   l2_gas: { max_amount: 40, max_price_per_unit: 50 },
 } satisfies ResourceBoundsOverhead;
 
-function getProvider(): RpcProvider {
+export const STARKNET_NFT_MIGRATION_RESOURCE_BOUNDS_OVERHEAD = {
+  ...STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD,
+  // Large on-chain card inventories can estimate close to Starknet's per-transaction
+  // L2 gas cap. Keep a targeted 20% execution margin without pushing max_amount
+  // above the protocol limit. Other operations retain the existing 40% margin.
+  l2_gas: { max_amount: 20, max_price_per_unit: 50 },
+} satisfies ResourceBoundsOverhead;
+
+export function shouldRetryNftMigrationWithReducedL2Overhead(
+  intents: readonly Pick<QueuedIntent, 'operation'>[],
+  error: unknown
+): boolean {
+  return (
+    intents.length > 0 &&
+    intents.every(intent => intent.operation === 'nft.migrate_cards') &&
+    asError(error).message.toLowerCase().includes('max gas amount is too high')
+  );
+}
+
+function getProvider(resourceBoundsOverhead: ResourceBoundsOverhead): RpcProvider {
   return new RpcProvider({
     nodeUrl: env.BACKGROUND_STARKNET_RPC_URL,
-    resourceBoundsOverhead: STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD,
+    resourceBoundsOverhead,
   });
 }
 
@@ -210,7 +229,7 @@ export async function executeStarknetIntentBatch(
       env.BACKGROUND_STARKNET_RPC_URL
     );
 
-    const provider = getProvider();
+    const provider = getProvider(STARKNET_BATCH_RESOURCE_BOUNDS_OVERHEAD);
     const account = new Account({
       provider,
       address: executor.address,
@@ -220,11 +239,29 @@ export async function executeStarknetIntentBatch(
 
     const submission = await withStarknetWriteLock(executor.address, async () => {
       const accountNonce = await account.getNonce();
-      const response = await account.execute(calls, {
-        nonce: accountNonce,
-        skipValidate: true,
-        tip,
-      });
+      let response;
+      try {
+        response = await account.execute(calls, {
+          nonce: accountNonce,
+          skipValidate: true,
+          tip,
+        });
+      } catch (error) {
+        if (!shouldRetryNftMigrationWithReducedL2Overhead(intents, error)) {
+          throw error;
+        }
+
+        const fallbackAccount = new Account({
+          provider: getProvider(STARKNET_NFT_MIGRATION_RESOURCE_BOUNDS_OVERHEAD),
+          address: executor.address,
+          signer: executor.privateKey,
+        });
+        response = await fallbackAccount.execute(calls, {
+          nonce: accountNonce,
+          skipValidate: true,
+          tip,
+        });
+      }
 
       return {
         transactionHash: response.transaction_hash,
