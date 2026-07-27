@@ -5,17 +5,118 @@ import type { PushDevice } from './types.js';
 
 export const ARGENTINA_TIMEZONE = 'America/Argentina/Buenos_Aires';
 
-export async function sendPushNotification(fcmToken: string, title: string, body: string): Promise<boolean> {
+export type PushNotificationResult = 'sent' | 'invalid_token' | 'temporary_failure';
+
+type PushNotificationDependencies = {
+  sendMessage: (message: {
+    token: string;
+    notification: { title: string; body: string };
+  }) => Promise<unknown>;
+  disableToken: (token: string) => Promise<void>;
+  logger: Pick<Console, 'error' | 'info'>;
+};
+
+function getDefaultPushNotificationDependencies(): PushNotificationDependencies {
+  return {
+    sendMessage: message => getFirebaseAdmin().messaging().send(message),
+    disableToken: async token => {
+      const { error } = await supabase
+        .from('push_devices')
+        .update({ disabled: true })
+        .eq('fcm_token', token)
+        .eq('disabled', false);
+
+      if (error) {
+        throw error;
+      }
+    },
+    logger: console,
+  };
+}
+
+function getErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') {
+    return undefined;
+  }
+
+  const directCode = (error as { code?: unknown }).code;
+  if (typeof directCode === 'string') {
+    return directCode;
+  }
+
+  const errorInfo = (error as { errorInfo?: unknown }).errorInfo;
+  if (errorInfo && typeof errorInfo === 'object') {
+    const nestedCode = (errorInfo as { code?: unknown }).code;
+    return typeof nestedCode === 'string' ? nestedCode : undefined;
+  }
+
+  return undefined;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error && typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+  return String(error);
+}
+
+function compactToken(token: string): string {
+  if (token.length <= 12) {
+    return '[redacted]';
+  }
+  return `${token.slice(0, 8)}...${token.slice(-4)}`;
+}
+
+function getSafeErrorSummary(error: unknown, token: string): string {
+  const code = getErrorCode(error) ?? 'unknown';
+  const rawMessage = getErrorMessage(error);
+  const message = (token ? rawMessage.replaceAll(token, '[redacted]') : rawMessage).slice(0, 500);
+  return `code=${code} message=${message}`;
+}
+
+function isInvalidRegistrationTokenError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return (
+    code === 'messaging/registration-token-not-registered' ||
+    code === 'messaging/invalid-registration-token'
+  );
+}
+
+export async function sendPushNotification(
+  fcmToken: string,
+  title: string,
+  body: string,
+  dependencies: PushNotificationDependencies = getDefaultPushNotificationDependencies()
+): Promise<PushNotificationResult> {
   try {
-    const admin = getFirebaseAdmin();
-    await admin.messaging().send({
+    await dependencies.sendMessage({
       token: fcmToken,
       notification: { title, body },
     });
-    return true;
+    return 'sent';
   } catch (error) {
-    console.error(`[FCM] Error sending to ${fcmToken}:`, error);
-    return false;
+    if (isInvalidRegistrationTokenError(error)) {
+      try {
+        await dependencies.disableToken(fcmToken);
+        dependencies.logger.info(`[FCM] Disabled invalid token=${compactToken(fcmToken)}`);
+      } catch (disableError) {
+        dependencies.logger.error(
+          `[FCM] Failed to disable invalid token=${compactToken(fcmToken)} ${getSafeErrorSummary(disableError, fcmToken)}`
+        );
+      }
+      return 'invalid_token';
+    }
+
+    dependencies.logger.error(
+      `[FCM] Push failed token=${compactToken(fcmToken)} ${getSafeErrorSummary(error, fcmToken)}`
+    );
+    return 'temporary_failure';
   }
 }
 

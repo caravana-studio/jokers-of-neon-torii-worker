@@ -85,9 +85,9 @@ async function sendCustomNotifications(): Promise<void> {
                     if (!prefEnabled) continue;
 
                     const { title, body } = getLocalizedMessage(notification.messages, userPrefs.language);
-                    const sent = await sendPushNotification(device.fcm_token, title, body);
+                    const pushResult = await sendPushNotification(device.fcm_token, title, body);
 
-                    if (sent) {
+                    if (pushResult === 'sent') {
                         notifiedCount++;
                         console.log(
                             `[custom-notifications] sent mode=global notification=${notification.id} wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`
@@ -123,9 +123,9 @@ async function sendCustomNotifications(): Promise<void> {
                     if (currentHour !== notification.scheduled_hour) continue;
 
                     const { title, body } = getLocalizedMessage(notification.messages, userPrefs.language);
-                    const sent = await sendPushNotification(device.fcm_token, title, body);
+                    const pushResult = await sendPushNotification(device.fcm_token, title, body);
 
-                    if (sent) {
+                    if (pushResult === 'sent') {
                         notifiedCount++;
                         console.log(
                             `[custom-notifications] sent mode=local notification=${notification.id} wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`

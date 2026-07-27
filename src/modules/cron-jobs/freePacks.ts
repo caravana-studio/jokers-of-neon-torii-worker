@@ -100,9 +100,9 @@ async function sendFreePacksNotifications(): Promise<void> {
                 }
 
                 const { title, body } = getLocalizedMessage(userPrefs.language);
-                const sent = await sendPushNotification(device.fcm_token, title, body);
+                const pushResult = await sendPushNotification(device.fcm_token, title, body);
 
-                if (sent) {
+                if (pushResult === 'sent') {
                     await logNotificationSent(device.wallet, NOTIFICATION_TYPE, referenceId);
                     notifiedCount++;
                     console.log(`[free-packs] sent wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`);

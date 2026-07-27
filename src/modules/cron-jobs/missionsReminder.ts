@@ -162,11 +162,11 @@ async function sendMissionsReminder(): Promise<void> {
                     );
                 }
 
-                const sent = await sendPushNotification(device.fcm_token, title, body);
+                const pushResult = await sendPushNotification(device.fcm_token, title, body);
 
-                if (debug) console.log(`[missions-reminder-debug] send_result wallet=${compactWallet(device.wallet)} sent=${sent}`);
+                if (debug) console.log(`[missions-reminder-debug] send_result wallet=${compactWallet(device.wallet)} result=${pushResult}`);
 
-                if (sent) {
+                if (pushResult === 'sent') {
                     notifiedCount++;
                     console.log(`[missions-reminder] sent wallet=${compactWallet(device.wallet)} language=${userPrefs.language}`);
                 }
