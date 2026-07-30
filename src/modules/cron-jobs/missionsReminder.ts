@@ -180,13 +180,13 @@ function getLocalizedMessage(
         en:
             variant === 'active_streak_warning'
                 ? {
-                      title: "🔥 Don't lose your streak",
-                      body: `You have ${hoursRemaining} ${hoursRemaining === 1 ? 'hour' : 'hours'} left to complete a daily mission. Otherwise, you'll lose your streak.`
+                      title: `🔥 Your ${currentStreak}-day streak is on the line`,
+                      body: 'Complete 1 mission today to keep it alive.'
                   }
                 : variant === 'start_streak_warning'
                   ? {
                         title: '🔥 Start your streak today',
-                        body: `You have ${hoursRemaining} ${hoursRemaining === 1 ? 'hour' : 'hours'} left to complete a daily mission and start your streak.`
+                        body: 'Complete 1 mission and ignite your streak.'
                     }
                   : {
                         title: '⏳ Last call!',
@@ -198,13 +198,13 @@ function getLocalizedMessage(
         pt:
             variant === 'active_streak_warning'
                 ? {
-                      title: '🔥 Não perca sua sequência',
-                      body: `Faltam ${hoursRemaining} ${hoursRemaining === 1 ? 'hora' : 'horas'} para completar uma missão diária. Caso contrário, você vai perder sua sequência.`
+                      title: `🔥 Sua sequência de ${currentStreak} ${currentStreak === 1 ? 'dia' : 'dias'} está em jogo`,
+                      body: 'Complete 1 missão hoje para mantê-la viva.'
                   }
                 : variant === 'start_streak_warning'
                   ? {
                         title: '🔥 Comece sua sequência hoje',
-                        body: `Faltam ${hoursRemaining} ${hoursRemaining === 1 ? 'hora' : 'horas'} para completar uma missão diária e começar sua sequência.`
+                        body: 'Complete 1 missão e acenda sua sequência.'
                     }
                   : {
                         title: '⏳ Última chamada!',
