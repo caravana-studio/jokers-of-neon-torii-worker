@@ -155,19 +155,20 @@ function getLocalizedMessage(
     language: string,
     pendingCount: number,
     hoursRemaining: number,
-    variant: ReminderVariant
+    variant: ReminderVariant,
+    currentStreak: number
 ): NotificationMessage {
     const messages: Record<string, NotificationMessage> = {
         es:
             variant === 'active_streak_warning'
                 ? {
-                      title: '🔥 No pierdas tu racha',
-                      body: `Te quedan ${hoursRemaining} ${hoursRemaining === 1 ? 'hora' : 'horas'} para completar una misión diaria. Si no, vas a perder tu racha.`
+                      title: `🔥 Tu racha de ${currentStreak} ${currentStreak === 1 ? 'día' : 'días'} está en juego`,
+                      body: 'Completá 1 misión hoy para mantenerla viva.'
                   }
                 : variant === 'start_streak_warning'
                   ? {
                         title: '🔥 Empezá tu racha hoy',
-                        body: `Te quedan ${hoursRemaining} ${hoursRemaining === 1 ? 'hora' : 'horas'} para completar una misión diaria y empezar tu racha.`
+                        body: 'Completá 1 misión y encendé tu racha.'
                     }
                   : {
                         title: '⏳ ¡Última llamada!',
@@ -314,7 +315,13 @@ async function sendMissionsReminder(): Promise<void> {
                     : streakState.hasActiveStreak
                       ? 'active_streak_warning'
                       : 'start_streak_warning';
-                const { title, body } = getLocalizedMessage(userPrefs.language, pendingCount, hoursRemaining, variant);
+                const { title, body } = getLocalizedMessage(
+                    userPrefs.language,
+                    pendingCount,
+                    hoursRemaining,
+                    variant,
+                    streakState.currentStreak
+                );
 
                 if (debug) {
                     console.log(
