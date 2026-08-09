@@ -8,6 +8,10 @@ import {
   buildRoundDataCalldata,
 } from '../starknetExecutor.js';
 import type { Game, PlayerStats, Round } from '../schema.js';
+import { getAddress, isAddressEqual, parseUnits, zeroAddress } from 'viem';
+
+const USD_M_DECIMALS = 18;
+const UINT256_MAX = (1n << 256n) - 1n;
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -51,6 +55,35 @@ function getCeloProfileContractAddress(): string {
   return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
 }
 
+function getCeloRewardTokenContractAddress(): string {
+  return getAddress(env.CELO_REWARD_TOKEN_CONTRACT_ADDRESS);
+}
+
+function parseRewardRecipient(value: unknown): `0x${string}` {
+  const recipient = getAddress(asString(value, 'payload.recipient'));
+
+  if (isAddressEqual(recipient, zeroAddress)) {
+    throw new Error('payload.recipient cannot be the zero address');
+  }
+
+  return recipient;
+}
+
+function parseRewardAmount(value: unknown): bigint {
+  const amount = asString(value, 'payload.amount').trim();
+
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(amount)) {
+    throw new Error('payload.amount must be a positive decimal string with at most 18 decimal places');
+  }
+
+  const units = parseUnits(amount, USD_M_DECIMALS);
+  if (units <= 0n || units > UINT256_MAX) {
+    throw new Error('payload.amount must be greater than zero and fit in a uint256');
+  }
+
+  return units;
+}
+
 function buildCreateGameStats(player: string): string[] {
   return [
     player,
@@ -86,12 +119,13 @@ function buildGameWonStats(player: string): string[] {
 function toLegacyTransaction(
   intent: QueuedIntent,
   entrypoint: string,
-  calldata: unknown[]
+  calldata: unknown[],
+  contractAddress = getCeloProfileContractAddress()
 ): QueuedTransaction {
   return {
     id: intent.id,
     blockchain: intent.blockchain,
-    contractAddress: getCeloProfileContractAddress(),
+    contractAddress,
     entrypoint,
     calldata,
     retries: intent.retries,
@@ -100,7 +134,7 @@ function toLegacyTransaction(
   };
 }
 
-function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
+export function compileCeloIntent(intent: QueuedIntent): QueuedTransaction {
   const payload = intent.payload;
 
   switch (intent.operation) {
@@ -143,6 +177,15 @@ function buildLegacyTransaction(intent: QueuedIntent): QueuedTransaction {
       return toLegacyTransaction(intent, 'addPlayerStats', buildPlayerStatsCalldata(player, playerStats));
     }
 
+    case 'reward.usdm.transfer': {
+      return toLegacyTransaction(
+        intent,
+        'transfer',
+        [parseRewardRecipient(payload.recipient), parseRewardAmount(payload.amount)],
+        getCeloRewardTokenContractAddress()
+      );
+    }
+
     default:
       throw new Error(`Unsupported Celo operation: ${intent.operation}`);
   }
@@ -152,12 +195,20 @@ export const celoAdapter: BlockchainAdapter = {
   blockchain: 'celo',
 
   canExecute(intent) {
-    return ['game.snapshot', 'round.snapshot', 'progression.sync', 'stats.game_created', 'stats.game_won', 'stats.player'].includes(intent.operation);
+    return [
+      'game.snapshot',
+      'round.snapshot',
+      'progression.sync',
+      'stats.game_created',
+      'stats.game_won',
+      'stats.player',
+      'reward.usdm.transfer',
+    ].includes(intent.operation);
   },
 
   async execute(intent: QueuedIntent): Promise<TransactionResult> {
     try {
-      return await executeCeloQueueTransaction(buildLegacyTransaction(intent));
+      return await executeCeloQueueTransaction(compileCeloIntent(intent));
     } catch (error) {
       return {
         success: false,

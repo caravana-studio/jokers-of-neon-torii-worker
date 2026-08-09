@@ -4,6 +4,7 @@ import type { QueuedTransaction, TransactionResult } from '../transactionQueueTy
 import {
   createPublicClient,
   createWalletClient,
+  decodeFunctionResult,
   defineChain,
   encodeFunctionData,
   getAddress,
@@ -107,6 +108,19 @@ const celoProfileAbi = [
       { name: 'maxRound', type: 'uint32' },
     ],
     outputs: [],
+  },
+] as const;
+
+const erc20TransferAbi = [
+  {
+    type: 'function',
+    name: 'transfer',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'recipient', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+    ],
+    outputs: [{ name: '', type: 'bool' }],
   },
 ] as const;
 
@@ -260,6 +274,22 @@ function toUint8(value: unknown, label: string): number {
 
   if (parsed > 0xff) {
     throw new Error(`Invalid uint8 for ${label}: ${String(value)}`);
+  }
+
+  return parsed;
+}
+
+function toUint256(value: unknown, label: string): bigint {
+  let parsed: bigint;
+
+  try {
+    parsed = typeof value === 'bigint' ? value : BigInt(String(value));
+  } catch {
+    throw new Error(`Invalid uint256 for ${label}: ${String(value)}`);
+  }
+
+  if (parsed < 0n || parsed > (1n << 256n) - 1n) {
+    throw new Error(`Invalid uint256 for ${label}: ${String(value)}`);
   }
 
   return parsed;
@@ -485,8 +515,42 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
         });
         break;
       }
+      case 'transfer': {
+        if (transaction.calldata.length !== 2) {
+          throw new Error(`Invalid ERC-20 transfer calldata length: expected 2, received ${transaction.calldata.length}`);
+        }
+        data = encodeFunctionData({
+          abi: erc20TransferAbi,
+          functionName: 'transfer',
+          args: [
+            toAddress(transaction.calldata[0], 'transfer.recipient'),
+            toUint256(transaction.calldata[1], 'transfer.amount'),
+          ],
+        });
+        break;
+      }
       default:
         throw new Error(`Unsupported Celo entrypoint: ${transaction.entrypoint}`);
+    }
+
+    if (transaction.entrypoint === 'transfer') {
+      const simulation = await publicClient.call({
+        account: account.address,
+        to: contractAddress,
+        data,
+      });
+      if (!simulation.data) {
+        throw new Error('ERC-20 transfer simulation returned no data');
+      }
+
+      const accepted = decodeFunctionResult({
+        abi: erc20TransferAbi,
+        functionName: 'transfer',
+        data: simulation.data,
+      });
+      if (!accepted) {
+        throw new Error('ERC-20 transfer simulation returned false');
+      }
     }
 
     const hash = await walletClient.sendTransaction({
@@ -495,7 +559,10 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
       data,
     });
 
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== 'success') {
+      throw new Error(`Celo transaction reverted: ${hash}`);
+    }
 
     console.log(`[executor] confirmed chain=celo hash=${compactValue(hash)}`);
 
