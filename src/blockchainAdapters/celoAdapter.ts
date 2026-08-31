@@ -9,8 +9,11 @@ import {
 } from '../starknetExecutor.js';
 import type { Game, PlayerStats, Round } from '../schema.js';
 import { getAddress, isAddressEqual, parseUnits, zeroAddress } from 'viem';
+import {
+  CELO_REWARD_TOKENS,
+  isCeloRewardTokenId,
+} from '../config/celoRewardTokens.js';
 
-const USD_M_DECIMALS = 18;
 const UINT256_MAX = (1n << 256n) - 1n;
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -55,8 +58,14 @@ function getCeloProfileContractAddress(): string {
   return env.CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS;
 }
 
-function getCeloRewardTokenContractAddress(): string {
-  return getAddress(env.CELO_REWARD_TOKEN_CONTRACT_ADDRESS);
+function getRewardTokenConfig(value: unknown) {
+  const token = asString(value, 'payload.token').trim().toLowerCase();
+
+  if (!isCeloRewardTokenId(token)) {
+    throw new Error(`Unsupported reward token: ${String(value)}`);
+  }
+
+  return CELO_REWARD_TOKENS[token];
 }
 
 function parseRewardRecipient(value: unknown): `0x${string}` {
@@ -69,14 +78,22 @@ function parseRewardRecipient(value: unknown): `0x${string}` {
   return recipient;
 }
 
-function parseRewardAmount(value: unknown): bigint {
+function parseRewardAmount(
+  value: unknown,
+  token: { decimals: number; symbol: string }
+): bigint {
   const amount = asString(value, 'payload.amount').trim();
+  const amountPattern = new RegExp(
+    `^(?:0|[1-9]\\d*)(?:\\.\\d{1,${token.decimals}})?$`
+  );
 
-  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,18})?$/.test(amount)) {
-    throw new Error('payload.amount must be a positive decimal string with at most 18 decimal places');
+  if (!amountPattern.test(amount)) {
+    throw new Error(
+      `payload.amount must be a positive ${token.symbol} decimal string with at most ${token.decimals} decimal places`
+    );
   }
 
-  const units = parseUnits(amount, USD_M_DECIMALS);
+  const units = parseUnits(amount, token.decimals);
   if (units <= 0n || units > UINT256_MAX) {
     throw new Error('payload.amount must be greater than zero and fit in a uint256');
   }
@@ -177,12 +194,13 @@ export function compileCeloIntent(intent: QueuedIntent): QueuedTransaction {
       return toLegacyTransaction(intent, 'addPlayerStats', buildPlayerStatsCalldata(player, playerStats));
     }
 
-    case 'reward.usdm.transfer': {
+    case 'reward.token.transfer': {
+      const token = getRewardTokenConfig(payload.token);
       return toLegacyTransaction(
         intent,
         'transfer',
-        [parseRewardRecipient(payload.recipient), parseRewardAmount(payload.amount)],
-        getCeloRewardTokenContractAddress()
+        [parseRewardRecipient(payload.recipient), parseRewardAmount(payload.amount, token)],
+        token.address
       );
     }
 
@@ -202,7 +220,7 @@ export const celoAdapter: BlockchainAdapter = {
       'stats.game_created',
       'stats.game_won',
       'stats.player',
-      'reward.usdm.transfer',
+      'reward.token.transfer',
     ].includes(intent.operation);
   },
 

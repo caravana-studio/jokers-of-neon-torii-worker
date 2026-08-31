@@ -16,7 +16,7 @@ export type TransactionOperation =
   | 'stats.game_won'
   | 'stats.player'
   | 'pack.claimable.add'
-  | 'reward.usdm.transfer'
+  | 'reward.token.transfer'
   | 'missions.generate_daily'
   | 'missions.generate_weekly';
 
@@ -36,7 +36,7 @@ export const TRANSACTION_OPERATIONS: readonly TransactionOperation[] = [
   'stats.game_won',
   'stats.player',
   'pack.claimable.add',
-  'reward.usdm.transfer',
+  'reward.token.transfer',
   'missions.generate_daily',
   'missions.generate_weekly',
 ];

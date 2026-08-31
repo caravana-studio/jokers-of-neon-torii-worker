@@ -69,15 +69,16 @@ TRANSACTION_QUEUE_LEASE_MS=600000
 
 # Opcional (para ejecutar escrituras EVM en Celo)
 # En este worker Celo siempre usa mainnet.
-# En Celo el worker usa Profile y el token USDm para premios.
+# En Celo el worker usa Profile y USDm/USDT/USDC para premios.
 CELO_RPC_URL=https://forno.celo.org
 CELO_PRIVATE_KEY=0x...
 CELO_ADDRESS=0x...
 CELO_PROFILE_SYSTEM_CONTRACT_ADDRESS=0x...
-# Opcional; por defecto usa el contrato USDm oficial de Celo Mainnet.
-CELO_REWARD_TOKEN_CONTRACT_ADDRESS=0x765DE816845861e75A25fCA122bb6898B8B1282a
 WORKER_BLOCKCHAIN_FILTER=slot,starknet,celo
 ```
+
+Los contratos y decimales de USDm, USDT y USDC están fijados en
+`src/config/celoRewardTokens.ts`; no se configuran por variables de entorno.
 
 `WORKER_BLOCKCHAIN_FILTER` acepta una lista separada por comas, por ejemplo `slot,starknet,celo`, `starknet,celo` o `celo`.
 Filtra qué filas de `torii_worker_intent_queue` procesa esta instancia del worker. No cambia qué eventos llegan desde Torii; eso ya depende de `MANIFEST_SLOT_ENV`.
