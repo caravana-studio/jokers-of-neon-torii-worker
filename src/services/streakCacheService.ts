@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase.js';
 import type { MissionCompletedEventData } from '../blockchainEventHandlers.js';
 import type { QueuedIntent, TransactionResult } from '../transactionQueueTypes.js';
+import { countMaintenanceDaysInGap } from '../utils/streakMaintenance.js';
 
 const SECONDS_IN_DAY = 86400;
 const DAY_START_OFFSET_SECONDS = 21600; // 6am UTC = 3am Argentina time.
@@ -72,10 +73,17 @@ function calculateEffectiveStreak(input: {
 }) {
   const currentDay = input.currentDay ?? getCurrentDailyPeriodId();
   const hasStarted = input.currentStreak > 0 && input.lastCompletedDay > 0;
-  const daysMissed =
+  const rawDaysMissed =
     hasStarted && currentDay > input.lastCompletedDay
       ? Math.max(0, currentDay - input.lastCompletedDay - 1)
       : 0;
+  const maintenanceDays = hasStarted
+    ? countMaintenanceDaysInGap({
+      lastCompletedDay: input.lastCompletedDay,
+      currentDay,
+    })
+    : 0;
+  const daysMissed = Math.max(0, rawDaysMissed - maintenanceDays);
   const isProtected = hasStarted && daysMissed > 0 && daysMissed <= input.protectorsAvailable;
   const isBroken = hasStarted && daysMissed > input.protectorsAvailable;
   const effectiveStreak = isBroken ? 0 : input.currentStreak;
