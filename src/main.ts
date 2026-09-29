@@ -1,3 +1,5 @@
+import { getSupabase } from './config/supabase.js';
+import { ingestTerminalResult, SupabaseTerminalResultStore } from './durable/terminalResults.js';
 import { ToriiGrpcClient } from '@dojoengine/grpc';
 import { num, shortString } from 'starknet';
 import { env, getWorkerBlockchainFilter } from './env.js';
@@ -40,7 +42,8 @@ const txQueue = getTransactionQueue();
 
 const workerBlockchainFilter = getWorkerBlockchainFilter();
 const SUPPRESS_WORKER_LOGS_METADATA_KEY = 'suppressWorkerLogs';
-const TORII_EVENT_MODELS = [
+const durableRuntimeId = process.env.DURABLE_RUNTIME_ID?.trim();
+const TORII_EVENT_MODELS: readonly string[] = durableRuntimeId ? ['jokers_of_neon_core-DurableGameResultEvent'] : [
   'jokers_of_neon_core-MissionCompletedEvent',
   'jokers_of_neon_core-MissionCompletedV2Event',
   'jokers_of_neon_core-CreateGameEvent',
@@ -56,7 +59,7 @@ const TORII_RECONNECT_DELAY_MS = 2_000;
 const TORII_PERIODIC_CATCHUP_INTERVAL_MS = 2_000;
 const TORII_CATCHUP_RETRY_MAX_DELAY_MS = 60_000;
 const MAX_SEEN_TORII_EVENTS = 5_000;
-const TORII_LISTENER_NAME = 'core-events';
+const TORII_LISTENER_NAME = durableRuntimeId ? `durable-results:${durableRuntimeId}` : 'core-events';
 const CORE_NAMESPACE = 'jokers_of_neon_core';
 const CORE_TYPENAME_PREFIX = `${CORE_NAMESPACE}_`;
 const TORII_EVENT_MODEL_SET = new Set<string>(TORII_EVENT_MODELS);
@@ -243,7 +246,19 @@ function graphqlEdgeToEventMessage(edge: GraphqlEventEdge, worldAddress: string)
   };
 }
 
-const EVENT_MESSAGES_QUERY = `
+const EVENT_MESSAGES_QUERY = durableRuntimeId ? `
+  query EventMessages($first: Int, $last: Int, $before: Cursor, $after: Cursor) {
+    eventMessages(first: $first, last: $last, before: $before, after: $after) {
+      pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+      edges { cursor node { id executedAt models {
+        __typename
+        ... on jokers_of_neon_core_DurableGameResultEvent {
+          game_id runtime_id player player_name level round score is_tournament finished_at
+        }
+      } } }
+    }
+  }
+` : `
   query EventMessages($first: Int, $last: Int, $before: Cursor, $after: Cursor) {
     eventMessages(first: $first, last: $last, before: $before, after: $after) {
       pageInfo {
@@ -883,6 +898,10 @@ export async function startToriiWorker() {
   const worldAddress = getWorldAddress();
   const checkpointKey = createCheckpointKey(env.MANIFEST_SLOT_ENV, worldAddress);
 
+  if (durableRuntimeId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(durableRuntimeId)) throw new Error('Invalid DURABLE_RUNTIME_ID');
+  if (durableRuntimeId && !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Durable ingestion requires SUPABASE_SERVICE_ROLE_KEY');
+  const durableStore = durableRuntimeId ? new SupabaseTerminalResultStore(getSupabase()) : null;
+  if (durableStore && durableRuntimeId) await durableStore.replayPending(durableRuntimeId);
   await assertToriiEventCheckpointStorage();
   logWorkerLine('torii', { action: 'checkpoint_storage_ready', storage: 'supabase' });
 
@@ -1168,6 +1187,11 @@ export async function startToriiWorker() {
             continue;
           }
 
+          if (durableStore && durableRuntimeId) {
+            await ingestTerminalResult(durableStore, durableRuntimeId, worldAddress, modelValue as Record<string, unknown>);
+            rememberModelFingerprint(fingerprint);
+            continue;
+          }
           await onEventUpdated({
             data: [{
               ...normalizedItem,
@@ -1280,7 +1304,24 @@ export async function startToriiWorker() {
     const checkpoint = await loadToriiEventCheckpoint(checkpointKey);
 
     if (!checkpoint) {
-      await initializeCheckpointAtHead(reason);
+      if (durableRuntimeId) {
+        let after: string | null = null;
+        const historical: GraphqlEventEdge[] = [];
+        do {
+          const page = await fetchEventMessagesPage(toriiUrl, { first: TORII_GRAPHQL_CATCHUP_LIMIT, after });
+          historical.push(...page.edges);
+          if (!page.pageInfo.hasNextPage || page.edges.length === 0) break;
+          const next = page.pageInfo.endCursor ?? null;
+          if (!next || next === after) throw new Error('Durable bootstrap cursor did not advance');
+          after = next;
+        } while (true);
+        // Torii first/after traverses from newest to oldest. Reverse for deterministic replay.
+        for (const edge of historical.reverse()) {
+          await enqueueEvent(graphqlEdgeToEventMessage(edge, worldAddress), 'catchup', edge.cursor);
+        }
+      } else {
+        await initializeCheckpointAtHead(reason);
+      }
       return;
     }
 

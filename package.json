@@ -9,7 +9,13 @@
     "dev": "bun run ./src/index.ts",
     "test": "bun test tests",
     "trigger-missions": "bun run ./src/scripts/triggerMissions.ts",
-    "stress:queue": "bun run ./src/scripts/stressTransactionQueue.ts"
+    "stress:queue": "bun run ./src/scripts/stressTransactionQueue.ts",
+    "dev:v2": "bun run ./src/v2/index.ts",
+    "start:v2": "bun run ./dist/v2/index.js",
+    "dev:v2:settlement": "bun run ./src/v2/settlement/index.ts",
+    "start:v2:settlement": "bun run ./dist/v2/settlement/index.js",
+    "dev:v2:commerce": "bun run ./src/v2/commerceIndex.ts",
+    "start:v2:commerce": "bun run ./dist/v2/commerceIndex.js"
   },
   "main": "dist/index.js",
   "files": [

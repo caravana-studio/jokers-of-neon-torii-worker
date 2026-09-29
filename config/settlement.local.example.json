@@ -1,0 +1,16 @@
+{
+  "supabaseUrl": "http://127.0.0.1:55321",
+  "serviceKeyEnv": "JOKERS_LOCAL_SUPABASE_SERVICE_KEY",
+  "executors": [
+    {
+      "executorId": "REPLACE_WITH_REGISTERED_STARKNET_EXECUTOR_UUID",
+      "rpcUrl": "http://127.0.0.1:5050",
+      "signerEnv": "JOKERS_LOCAL_STARKNET_SIGNER"
+    },
+    {
+      "executorId": "REPLACE_WITH_REGISTERED_EVM_EXECUTOR_UUID",
+      "rpcUrl": "http://127.0.0.1:18545",
+      "signerEnv": "JOKERS_LOCAL_EVM_SIGNER"
+    }
+  ]
+}

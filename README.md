@@ -200,3 +200,33 @@ Entry point: `src/index.ts` — one process for Torii, queue, crons, notificatio
 See `.env.example` for module flags. Mission generation enqueues `missions.generate_daily` and `missions.generate_weekly` to the `slot` adapter, which uses the Slot/Katana RPC resolved from `MANIFEST_SLOT_ENV`. Starknet public writes for profile/progression/NFT remain on the `starknet` adapter.
 
 Test on staging (`MANIFEST_SLOT_ENV` for test slot) before prod cutover.
+
+
+## NFT settlement v2
+
+El entrypoint `src/v2/settlement/index.ts` funciona separado de gameplay y no importa
+el `.env` legacy. Recibe `JOKERS_V2_SETTLEMENT_CONFIG` con el formato de
+`config/settlement.local.example.json`; requiere migración 12, cadenas/colecciones/
+ejecutores registrados y referencias a secretos por variables de entorno.
+
+`npm run dev:v2:settlement` / `npm run start:v2:settlement` envían solo transacciones
+firmadas ya guardadas y verifican los mints antes de confirmar claims. Los errores
+de nonce/evidencia pasan a reconciliación sin otro mint automático. El registro de mint no es el inventario actual: la propiedad se sincroniza a demanda
+al consultar la colección o crear una partida; no hay indexación continua de transferencias.
+
+Prueba real local desde API: `npm run test:v2:nfts`. Detalle en
+`../jokers-of-neon-api/docs/multichain/V2_NFT_SETTLEMENT.md`.
+
+
+## Commerce v2 (Starknet)
+
+`npm run dev:v2:commerce` / `npm run start:v2:commerce` entrega recibos de pago
+verificados guardados en Supabase. No requiere Katana, Torii ni claves de pago.
+Configurar `JOKERS_V2_COMMERCE_CONFIG` con un JSON privado que contenga
+`supabaseUrl` y `serviceKeyEnv` (nombre de variable del secreto). Requiere release
+`starknet-commerce-v2`. El worker general v2 también procesa estos recibos y los
+reintentos concurrentes son idempotentes.
+
+USDC se verifica mediante el observador separado del repositorio API; RevenueCat
+mediante el webhook autenticado. Celo permanece deshabilitado para compras.
+Configuración, corte legacy y pruebas: [Commerce Starknet](../jokers-of-neon-api/docs/multichain/V2_STARKNET_COMMERCE.md).

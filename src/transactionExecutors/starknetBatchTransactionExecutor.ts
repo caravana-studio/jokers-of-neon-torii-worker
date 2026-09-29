@@ -76,7 +76,7 @@ export function shouldRetryNftMigrationWithReducedL2Overhead(
   );
 }
 
-function getProvider(resourceBoundsOverhead: ResourceBoundsOverhead): RpcProvider {
+function getProvider(resourceBoundsOverhead?: ResourceBoundsOverhead): RpcProvider {
   return new RpcProvider({
     nodeUrl: env.BACKGROUND_STARKNET_RPC_URL,
     resourceBoundsOverhead,
