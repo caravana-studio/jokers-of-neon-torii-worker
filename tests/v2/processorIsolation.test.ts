@@ -14,7 +14,7 @@ it("a broken pack catalog leaves its opening pending while unrelated archived ga
   const calls: string[] = [];
   let terminal = true;
   Reflect.set(worker, "db", {
-    rpc: async (name: string) => {
+    rpc: async (name: string, args: any) => {
       calls.push(name);
       let data: unknown;
       switch (name) {
@@ -33,7 +33,11 @@ it("a broken pack catalog leaves its opening pending while unrelated archived ga
           data = terminal ? [{ event_id: "1" }] : [];
           terminal = false;
           break;
-        case "apply_terminal_result":
+        case "claim_processing_job":
+          data = {job_id: "job", lease_token: "token", attempts: 1, target: args.p_target};
+          break;
+        case "finish_processing_job":
+        case "apply_processing_effects":
           data = null;
           break;
         case "next_gameplay_fact":
@@ -46,7 +50,7 @@ it("a broken pack catalog leaves its opening pending while unrelated archived ga
     },
   });
   await expect(worker.replayPending()).rejects.toThrow("INVALID_PACK_CATALOG");
-  expect(calls).toContain("apply_terminal_result");
+  expect(calls).toContain("apply_processing_effects");
   expect(calls).toContain("next_gameplay_fact");
   expect(calls).not.toContain("resolve_pack_opening");
 });

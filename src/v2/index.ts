@@ -1,9 +1,7 @@
-import { readFile } from 'node:fs/promises';
-import { V2TerminalWorker, type WorkerConfig } from './terminalWorker.js';
+import { V2TerminalWorker } from './terminalWorker.js';
+import { readWorkerConfig } from './config.js';
 
-const path = process.env.JOKERS_V2_WORKER_CONFIG;
-if (!path) throw new Error('JOKERS_V2_WORKER_CONFIG_REQUIRED');
-const config = JSON.parse(await readFile(path, 'utf8')) as WorkerConfig;
+const config = await readWorkerConfig();
 const worker = new V2TerminalWorker(config);
 await worker.ready();
 let running = true;
