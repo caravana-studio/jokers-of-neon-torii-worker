@@ -1,0 +1,12 @@
+{
+  "supabaseUrl": "https://REPLACE_WITH_V2_PROJECT.supabase.co",
+  "serviceKeyEnv": "JOKERS_V2_SUPABASE_SERVICE_KEY",
+  "executors": [
+    {
+      "executorId": "REPLACE_WITH_REGISTERED_CELO_EXECUTOR_UUID",
+      "rpcUrl": "https://forno.celo-sepolia.celo-testnet.org",
+      "signerEnv": "JOKERS_V2_CELO_NFT_SIGNER",
+      "nftProtocol": "mint-cards-v1"
+    }
+  ]
+}

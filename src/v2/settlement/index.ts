@@ -4,12 +4,13 @@ import { EvmNftAdapter } from "./evm.js";
 import { StarknetNftAdapter } from "./starknet.js";
 import { NftSettlementWorker } from "./worker.js";
 import type { Executor } from "./types.js";
+import type { EvmNftProtocol } from "./solidityCards.js";
 const path = process.env.JOKERS_V2_SETTLEMENT_CONFIG;
 if (!path) throw new Error("JOKERS_V2_SETTLEMENT_CONFIG_REQUIRED");
 const config = JSON.parse(await readFile(path, "utf8")) as {
   supabaseUrl: string;
   serviceKeyEnv: string;
-  executors: { executorId: string; rpcUrl: string; signerEnv: string }[];
+  executors: { executorId: string; rpcUrl: string; signerEnv: string; nftProtocol?: EvmNftProtocol }[];
 };
 const env = (name: string) => {
   if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !process.env[name])
@@ -50,7 +51,7 @@ for (const c of config.executors) {
     throw new Error("SETTLEMENT_SIGNER_REFERENCE_MISMATCH");
   const adapter =
     e.adapter_key === "evm"
-      ? new EvmNftAdapter(c.rpcUrl, key as `0x${string}`)
+      ? new EvmNftAdapter(c.rpcUrl, key as `0x${string}`, c.nftProtocol)
       : e.adapter_key === "starknet"
         ? new StarknetNftAdapter(c.rpcUrl, e.address, key)
         : null;
