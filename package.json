@@ -15,7 +15,9 @@
     "dev:v2:settlement": "bun run ./src/v2/settlement/index.ts",
     "start:v2:settlement": "bun run ./dist/v2/settlement/index.js",
     "dev:v2:commerce": "bun run ./src/v2/commerceIndex.ts",
-    "start:v2:commerce": "bun run ./dist/v2/commerceIndex.js"
+    "start:v2:commerce": "bun run ./dist/v2/commerceIndex.js",
+    "dev:v2:services": "bun run ./src/v2/servicesIndex.ts",
+    "start:v2:services": "bun run ./dist/v2/servicesIndex.js"
   },
   "main": "dist/index.js",
   "files": [
