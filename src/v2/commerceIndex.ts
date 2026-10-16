@@ -33,7 +33,7 @@ if (
   )
 )
   throw new Error("V2_SCHEMA_VERSION_REQUIRED");
-if (c.providers?.length && !release.data.some(r => r.release_key === 'payment-providers-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
+if (c.providers?.length && !release.data.some(r => r.release_key === 'payment-recovery-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
 const registry = new Map<string, PaymentAdapters>();
 for (const p of c.providers ?? []) {
   if (registry.has(p.providerKey)) throw Error('DUPLICATE_PAYMENT_PROVIDER');

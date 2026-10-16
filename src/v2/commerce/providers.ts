@@ -13,7 +13,7 @@ export interface Observation {
   amount_atomic: string; block_number: string; block_hash: string; paid_at: string;
 }
 export interface Verification { status: 'pending' | 'verified' | 'review'; code: string | null; events: Observation[] }
-export interface ScanPage { from: string; next: string; hash: string; events: Observation[] }
+export interface ScanPage { from: string; next: string; hash: string; coveredThrough: string; events: Observation[] }
 /** Provider verification returns facts; it never creates purchases or grants benefits. */
 export interface PaymentAdapter {
   readonly kind: string;

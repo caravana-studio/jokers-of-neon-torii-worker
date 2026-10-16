@@ -27,8 +27,8 @@ export class ProviderPaymentObserver {
         // Cursor must be reloaded after acquiring the lease.
         const current=await this.rpc<ProviderSnapshot>('payment_provider_snapshot',{p_provider:key});
         const page=await adapters.get(current.adapter_kind).scan(current);
-        if(page) await this.rpc('commit_payment_scan',{p_job:lease.job_id,p_token:lease.lease_token,p_provider:key,
-          p_from:page.from,p_next:page.next,p_hash:page.hash,p_events:page.events});
+        if(page) await this.rpc('commit_payment_scan_checkpoint',{p_job:lease.job_id,p_token:lease.lease_token,p_provider:key,
+          p_from:page.from,p_next:page.next,p_hash:page.hash,p_events:page.events,p_covered_through:page.coveredThrough});
         return {result:null,completed:false};
       }));
     }

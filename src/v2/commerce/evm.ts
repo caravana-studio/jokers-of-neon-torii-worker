@@ -68,13 +68,20 @@ export class EvmTransferAdapter implements PaymentAdapter {
     // Store matching-party transfers even when their amount/window is invalid. SQL keeps evidence for review.
     return {status:'verified',code:null,events};
   }
+  private blockTime(block:any):string {
+    const seconds=BigInt(block.timestamp);
+    if(seconds<0n || seconds>BigInt(Math.floor(Date.now()/1000)+120)) throw Error('PAYMENT_BLOCK_INVALID');
+    return new Date(Number(seconds)*1000).toISOString();
+  }
   async scan(s:ProviderSnapshot):Promise<ScanPage|null> {
     const head=await this.head(s), from=BigInt(s.cursor.next_block);
+    let previous:any;
     if(s.cursor.last_block_hash && from>0n) {
-      const previous=await this.rpc('eth_getBlockByNumber',[toHex(from-1n),false]);
+      if(BigInt(head.number)<from-1n) throw Error('PAYMENT_FINALIZED_REORG');
+      previous=await this.rpc('eth_getBlockByNumber',[toHex(from-1n),false]);
       if(previous?.hash?.toLowerCase()!==s.cursor.last_block_hash) throw Error('PAYMENT_FINALIZED_REORG');
     }
-    if(from>BigInt(head.number)) return null;
+    if(from>BigInt(head.number)) return previous ? {from:from.toString(),next:from.toString(),hash:previous.hash.toLowerCase(),coveredThrough:this.blockTime(previous),events:[]} : null;
     let end=from+99n<BigInt(head.number)?from+99n:BigInt(head.number);
     let logs:any[];
     for(;;) {
@@ -93,6 +100,6 @@ export class EvmTransferAdapter implements PaymentAdapter {
     if(events.length>1000) throw Error('PAYMENT_SCAN_BLOCK_LIMIT');
     const block=await this.rpc('eth_getBlockByNumber',[toHex(end),false]);
     if(!block || !hash.test(block.hash)) throw Error('PAYMENT_BLOCK_INVALID');
-    return {from:from.toString(),next:(end+1n).toString(),hash:block.hash.toLowerCase(),events};
+    return {from:from.toString(),next:(end+1n).toString(),hash:block.hash.toLowerCase(),coveredThrough:this.blockTime(block),events};
   }
 }
