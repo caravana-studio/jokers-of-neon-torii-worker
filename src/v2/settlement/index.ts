@@ -1,17 +1,10 @@
-import { readFile } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
 import { EvmNftAdapter } from "./evm.js";
 import { StarknetNftAdapter } from "./starknet.js";
 import { NftSettlementWorker } from "./worker.js";
 import type { Executor } from "./types.js";
-import type { EvmNftProtocol } from "./solidityCards.js";
-const path = process.env.JOKERS_V2_SETTLEMENT_CONFIG;
-if (!path) throw new Error("JOKERS_V2_SETTLEMENT_CONFIG_REQUIRED");
-const config = JSON.parse(await readFile(path, "utf8")) as {
-  supabaseUrl: string;
-  serviceKeyEnv: string;
-  executors: { executorId: string; rpcUrl: string; signerEnv: string; nftProtocol?: EvmNftProtocol }[];
-};
+import { readSettlementConfig } from "./config.js";
+const config = await readSettlementConfig();
 const env = (name: string) => {
   if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !process.env[name])
     throw new Error("SETTLEMENT_SECRET_REQUIRED");
