@@ -1,9 +1,9 @@
 import { ProcessingJobs, type ProcessingRpc } from '../processingJobs.js';
-import { PaymentAdapters, type ProviderSnapshot, type Submission } from './providers.js';
+import { PaymentAdapters, type ProviderSnapshot, type Submission, type Observation } from './providers.js';
 export class ProviderPaymentObserver {
   private readonly jobs:ProcessingJobs;
-  constructor(private readonly rpc:ProcessingRpc,private readonly providers:Map<string,PaymentAdapters>) { this.jobs=new ProcessingJobs(rpc); }
-  async ready() { for(const kind of ['payment-scan','payment-verify']) await this.jobs.ready(kind); }
+  constructor(private readonly rpc:ProcessingRpc,private readonly providers:Map<string,PaymentAdapters>,private readonly afterVerification?:()=>Promise<void>) { this.jobs=new ProcessingJobs(rpc); }
+  async ready() { for(const kind of ['payment-scan','payment-verify','payment-finality']) await this.jobs.ready(kind); }
   async pollOnce() {
     const errors: {provider_key:string;stage:string;code:string}[]=[];
     for(const [key,adapters] of this.providers) {
@@ -18,8 +18,21 @@ export class ProviderPaymentObserver {
         const pending=await this.rpc<Submission[]>('pending_provider_submissions',{p_provider:key});
         for(const p of pending) await run('verify',()=>this.jobs.run('payment-verify',p.submission_id,{submission_id:p.submission_id},async lease=>{
           const result=await adapters.get(snapshot.adapter_kind).verify(snapshot,p);
-          await this.rpc('commit_payment_verification',{p_job:lease.job_id,p_token:lease.lease_token,p_submission:p.submission_id,
-            p_status:result.status,p_code:result.code,p_events:result.events});
+          await this.rpc('commit_receipt_payment_verification',{p_job:lease.job_id,p_token:lease.lease_token,p_submission:p.submission_id,
+            p_status:result.status,p_code:result.code,p_events:result.events,p_confirmation:p.order.delivery_confirmation==='receipt'?'mined':'finalized'});
+          if(result.status==='verified') await this.afterVerification?.();
+          return {result:null,completed:result.status!=='pending'};
+        }));
+      });
+      await run('finality',async()=>{
+        const adapter=adapters.get(snapshot.adapter_kind);
+        if(!adapter.reconcile) return;
+        const pending=await this.rpc<{observation_id:string;event:Observation}[]>('pending_payment_finality',{p_provider:key});
+        for(const item of pending) await run('finality',()=>this.jobs.run('payment-finality',item.observation_id,{observation_id:item.observation_id},async lease=>{
+          const result=await adapter.reconcile!(snapshot,item.event);
+          await this.rpc('commit_payment_finality',{p_job:lease.job_id,p_token:lease.lease_token,p_observation:item.observation_id,
+            p_status:result.status,p_code:result.code});
+          if(result.status==='review') console.error('V2 payment finality requires review',{observation_id:item.observation_id,code:result.code});
           return {result:null,completed:result.status!=='pending'};
         }));
       });

@@ -6,7 +6,7 @@ export interface ProviderSnapshot {
   cursor: { next_block: string; last_block_hash: string | null; revision: string };
 }
 export interface Submission { submission_id: string; tx_hash: string; wallet: string; order: {
-  order_id: string; quote: Record<string,string>; created_at: string; expires_at: string;
+  order_id: string; delivery_confirmation?: 'receipt' | 'finalized'; quote: Record<string,string>; created_at: string; expires_at: string;
 } }
 export interface Observation {
   network_id: string; tx_hash: string; log_index: number; token_address: string; sender: string; recipient: string;
@@ -18,6 +18,7 @@ export interface ScanPage { from: string; next: string; hash: string; coveredThr
 export interface PaymentAdapter {
   readonly kind: string;
   verify(snapshot: ProviderSnapshot, submission: Submission): Promise<Verification>;
+  reconcile?(snapshot: ProviderSnapshot, event: Observation): Promise<{ status: 'pending' | 'finalized' | 'review'; code: string | null }>;
   scan(snapshot: ProviderSnapshot): Promise<ScanPage | null>;
 }
 export class PaymentAdapters {

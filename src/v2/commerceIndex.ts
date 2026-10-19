@@ -33,16 +33,20 @@ if (
   )
 )
   throw new Error("V2_SCHEMA_VERSION_REQUIRED");
-if (c.providers?.length && !release.data.some(r => r.release_key === 'payment-recovery-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
+if (c.providers?.length && !release.data.some(r => r.release_key === 'receipt-payment-delivery-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
 const registry = new Map<string, PaymentAdapters>();
 for (const p of c.providers ?? []) {
   if (registry.has(p.providerKey)) throw Error('DUPLICATE_PAYMENT_PROVIDER');
   registry.set(p.providerKey,new PaymentAdapters().register(new EvmTransferAdapter(paymentRpc(p.rpcUrl))));
 }
 const rpc = async <T>(name: string,args:Record<string,unknown>):Promise<T> => { const r=await db.rpc(name,args); if(r.error) throw Error(r.error.message); return r.data as T; };
-const observer = new ProviderPaymentObserver(rpc,registry);
-if (registry.size) await observer.ready();
 const worker = new CommerceWorker(db, registry.size > 0);
+const fulfill = async () => {
+  const count=await worker.replayPending();
+  if(count) console.info('V2 commerce fulfilled',{count});
+};
+const observer = new ProviderPaymentObserver(rpc,registry,fulfill);
+if (registry.size) await observer.ready();
 console.info('V2 commerce worker ready', { providers: [...registry.keys()] });
 let running = true;
 process.on("SIGINT", () => {

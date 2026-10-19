@@ -20,23 +20,23 @@ const review=(code:string):Verification=>({status:'review',code,events:[]});
 export class EvmTransferAdapter implements PaymentAdapter {
   readonly kind='evm_erc20_transfer';
   constructor(private readonly rpc:EvmRpc) {}
-  private async head(s:ProviderSnapshot) {
+  private async head(s:ProviderSnapshot,tag: 'latest' | 'finalized' = 'finalized') {
     if(s.config.finality!=='finalized' || !/^[1-9][0-9]*$/.test(s.config.chain_id) || !address.test(s.config.treasury_address) || !s.assets?.length ||
       s.assets.some(a=>!address.test(a.address)||!Number.isInteger(a.decimals)||a.decimals<6||a.decimals>36)) throw Error('PAYMENT_CONFIGURATION_INVALID');
     if(BigInt(await this.rpc('eth_chainId',[]))!==BigInt(s.config.chain_id)) throw Error('PAYMENT_CHAIN_MISMATCH');
-    const b=await this.rpc('eth_getBlockByNumber',['finalized',false]);
-    if(!b || !hash.test(b.hash) || b.number==null) throw Error('PAYMENT_NOT_FINAL');
+    const b=await this.rpc('eth_getBlockByNumber',[tag,false]);
+    if(!b || !hash.test(b.hash) || b.number==null) throw Error(tag==='finalized'?'PAYMENT_NOT_FINAL':'PAYMENT_HEAD_UNAVAILABLE');
     for(const asset of s.assets) {
       const decimals=await this.rpc('eth_call',[{to:asset.address,data:'0x313ce567'},b.number]);
       if(BigInt(decimals)!==BigInt(asset.decimals)) throw Error('PAYMENT_TOKEN_DECIMALS_MISMATCH');
     }
     return b;
   }
-  private async receipt(s:ProviderSnapshot,tx:string,head:any):Promise<{pending?:string; invalid?:string; events:Observation[]}> {
+  private async receipt(s:ProviderSnapshot,tx:string,head?:{number:string}):Promise<{pending?:string; invalid?:string; events:Observation[]}> {
     const r=await this.rpc('eth_getTransactionReceipt',[tx]);
     if(!r || r.blockNumber==null) return {pending:'PAYMENT_NOT_MINED',events:[]};
     if(!hash.test(r.blockHash) || String(r.transactionHash).toLowerCase()!==tx.toLowerCase()) throw Error('PAYMENT_RECEIPT_MISMATCH');
-    if(BigInt(r.blockNumber)>BigInt(head.number)) return {pending:'PAYMENT_NOT_FINAL',events:[]};
+    if(head && BigInt(r.blockNumber)>BigInt(head.number)) return {pending:'PAYMENT_NOT_FINAL',events:[]};
     const b=await this.rpc('eth_getBlockByNumber',[r.blockNumber,false]);
     if(!b || b.hash.toLowerCase()!==r.blockHash.toLowerCase()) return {pending:'PAYMENT_REORG_PENDING',events:[]};
     if(BigInt(r.status)!==1n) return {invalid:'PAYMENT_NOT_SUCCEEDED',events:[]};
@@ -59,14 +59,27 @@ export class EvmTransferAdapter implements PaymentAdapter {
   async verify(s:ProviderSnapshot,p:Submission):Promise<Verification> {
     if(!hash.test(p.tx_hash)) return review('INVALID_PAYMENT_HASH');
     let head;
-    try { head=await this.head(s); } catch(e) { if(e instanceof Error && e.message==='PAYMENT_NOT_FINAL') return pending(e.message); throw e; }
-    const r=await this.receipt(s,p.tx_hash,head);
+    try { head=await this.head(s,p.order.delivery_confirmation==='receipt'?'latest':'finalized'); } catch(e) { if(e instanceof Error && e.message==='PAYMENT_NOT_FINAL') return pending(e.message); throw e; }
+    const r=await this.receipt(s,p.tx_hash,p.order.delivery_confirmation==='receipt'?undefined:head);
     if(r.pending) return pending(r.pending);
     if(r.invalid) return review(r.invalid);
     const events=r.events.filter(e=>e.sender===p.wallet.toLowerCase() && e.token_address===p.order.quote.token_address && e.recipient===p.order.quote.treasury_address);
     if(!events.length) return review('PAYMENT_TRANSFER_MISMATCH');
     // Store matching-party transfers even when their amount/window is invalid. SQL keeps evidence for review.
     return {status:'verified',code:null,events};
+  }
+  async reconcile(s:ProviderSnapshot,event:Observation):Promise<{status:'pending'|'finalized'|'review';code:string|null}> {
+    const head=await this.head(s);
+    // Re-read the live receipt even before finality, detecting changed evidence early.
+    const result=await this.receipt(s,event.tx_hash);
+    if(result.pending) return result.pending==='PAYMENT_REORG_PENDING'
+      ? {status:'review',code:'PAYMENT_EVIDENCE_CHANGED'}
+      : {status:'pending',code:result.pending};
+    const current=result.events.find(e=>e.log_index===event.log_index);
+    if(result.invalid || !current || Object.keys(event).some(k=>current[k as keyof Observation]!==event[k as keyof Observation]))
+      return {status:'review',code:'PAYMENT_EVIDENCE_CHANGED'};
+    return BigInt(event.block_number)<=BigInt(head.number)
+      ? {status:'finalized',code:null} : {status:'pending',code:'PAYMENT_NOT_FINAL'};
   }
   private blockTime(block:any):string {
     const seconds=BigInt(block.timestamp);
