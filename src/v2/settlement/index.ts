@@ -26,7 +26,7 @@ const release = await db
 if (
   release.error ||
   !release.data.some(
-    (r) => r.release_key === "nft-settlement-v2" && r.protocol_version === 2,
+    (r) => r.release_key === "fast-nft-settlement-v2" && r.protocol_version === 2,
   )
 )
   throw new Error("V2_SCHEMA_VERSION_REQUIRED");
@@ -63,8 +63,11 @@ process.on("SIGTERM", () => {
 console.info("V2 NFT settlement ready", {
   executors: workers.map((w) => w.id),
 });
-while (running) {
-  for (const { id, worker } of workers) {
+async function sends() {
+ while (running) {
+  // Executors have independent nonce lanes; a slow chain cannot stall another.
+  for (let offset = 0; offset < workers.length; offset += 4)
+   await Promise.all(workers.slice(offset, offset + 4).map(async ({ id, worker }) => {
     try {
       const result = await worker.pollOnce();
       if (result.prepared || result.confirmed || result.errors)
@@ -74,6 +77,17 @@ while (running) {
         executorId: id,
       });
     }
-  }
+  }));
   if (running) await new Promise((resolve) => setTimeout(resolve, 2000));
+ }
 }
+async function finality() {
+ while (running) {
+  for (let offset = 0; offset < workers.length; offset += 4)
+   await Promise.all(workers.slice(offset, offset + 4).map(async ({ worker }) => {
+    try { await worker.reconcileFinality(); } catch { console.error("V2 NFT finality retry"); }
+   }));
+  if (running) await new Promise(resolve => setTimeout(resolve, 30000));
+ }
+}
+await Promise.all([sends(), finality()]);

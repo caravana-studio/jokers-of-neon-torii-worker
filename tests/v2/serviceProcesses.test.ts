@@ -12,7 +12,7 @@ async function until(check: () => Promise<boolean>) {
   throw new Error("CHILD_PROCESS_TEST_TIMEOUT");
 }
 test("one worker runs gameplay, payments and NFT; NFT restart does not restart the other services", async () => {
-  expect(configuredServices({})).toEqual(["index"]);
+  expect(configuredServices({})).toEqual(["index", "packIndex"]);
   const services = configuredServices({ JOKERS_V2_COMMERCE_CONFIG_JSON: "{}", JOKERS_V2_SETTLEMENT_CONFIG_JSON: "{}" });
   const directory = await mkdtemp(join(tmpdir(), "v2-services-"));
   await mkdir(join(directory, "settlement"));

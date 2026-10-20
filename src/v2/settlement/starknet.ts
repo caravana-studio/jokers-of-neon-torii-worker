@@ -1,9 +1,10 @@
+import { starkCardFields, starkMintHash } from "@jokers-of-neon/pack-domain";
+export { starkCardFields, starkMintHash } from "@jokers-of-neon/pack-domain";
 import {
   Account,
   RpcProvider,
   hash,
   ETransactionVersion,
-  shortString,
   stark,
 } from "starknet";
 import {
@@ -18,29 +19,10 @@ import {
   type Observation,
   type SignedMint,
 } from "./types.js";
+import { acceptsStarknetStatus } from "../chainEvidence/policy.js";
 const hex = (n: unknown) => "0x" + BigInt(n as string).toString(16);
 const jsonSafe = (v: unknown) =>
   JSON.parse(JSON.stringify(v, (_, x) => (typeof x === "bigint" ? hex(x) : x)));
-export function starkCardFields(o: NftOperation): string[] {
-  const c = o.payload.card;
-  return [
-    c.item_id,
-    c.item_type,
-    c.card_id,
-    c.rarity,
-    c.skin_id,
-    c.skin_rarity,
-    c.quality,
-    c.marketable ? 1 : 0,
-  ].map(String);
-}
-export const starkMintHash = (o: NftOperation) =>
-  hash.computePoseidonHashOnElements([
-    shortString.encodeShortString("mint-card-v1"),
-    o.beneficiary,
-    "1",
-    ...starkCardFields(o),
-  ]);
 class RpcError extends Error {
   constructor(readonly code: number) {
     super("STARKNET_RPC_" + code);
@@ -209,15 +191,10 @@ export class StarknetNftAdapter implements NftAdapter {
     if (!receipt.block_hash || !Number.isSafeInteger(receipt.block_number))
       return { kind: "pending" };
     const p = this.executor!.confirmation_policy;
-    if (p.finality !== "local" && receipt.finality_status !== "ACCEPTED_ON_L1")
-      return { kind: "pending" };
-    if (
-      p.finality === "local" &&
-      !["ACCEPTED_ON_L2", "ACCEPTED_ON_L1"].includes(receipt.finality_status)
-    )
+    if (!acceptsStarknetStatus(receipt.finality_status, s.operation.acceptance ?? "finalized", p.finality === "local"))
       return { kind: "pending" };
     const head = await this.provider.getBlockNumber();
-    if (head - receipt.block_number + 1 < p.confirmations)
+    if (head - receipt.block_number + 1 < (s.operation.acceptance === "receipt" ? 1 : p.confirmations))
       return { kind: "pending" };
     if (
       (await this.canonicalBlock(String(receipt.block_number))) !==
@@ -292,5 +269,13 @@ export class StarknetNftAdapter implements NftAdapter {
         event_index: index,
       },
     };
+  }
+  async finalized(s: NftSubmission) {
+    if (!s.confirmed_block) return false;
+    const receipt = await this.rpc("starknet_getTransactionReceipt", { transaction_hash: s.tx_hash });
+    return receipt.execution_status === "SUCCEEDED" &&
+      receipt.block_hash && hex(receipt.block_hash) === s.confirmed_block.hash &&
+      acceptsStarknetStatus(receipt.finality_status, "finalized", this.executor!.confirmation_policy.finality === "local") &&
+      await this.canonicalBlock(s.confirmed_block.number) === s.confirmed_block.hash;
   }
 }

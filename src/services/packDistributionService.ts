@@ -4,6 +4,7 @@ import { getTransactionQueue } from '../transactionQueue.js';
 import { getLeaderboardService } from './leaderboardService.js';
 import { getRewardsConfig, getRewardsForPosition } from '../config/rewardsConfig.js';
 import { PeriodType, LeaderboardEntry } from '../types/leaderboard.js';
+import { hybridRewardsConfigured, issueHybridRankingReward } from "./hybridPackRewards.js";
 
 interface PlayerRewardData {
   position: number;
@@ -175,9 +176,15 @@ export class PackDistributionService {
    */
   private async distributePackToPlayer(
     player: LeaderboardEntry,
-    packId: number
+    packId: number,
+    sourceKey: string,
+    evidence: Record<string, unknown>,
   ): Promise<string | null> {
     try {
+      const grant = await issueHybridRankingReward(player.owner, packId, sourceKey, evidence);
+      if (grant) return grant;
+      if (!env.TRANSACTION_QUEUE_ENABLED || !env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !hasStarknetTransactionExecutor())
+        throw Error("LEGACY_REWARD_EXECUTOR_UNAVAILABLE");
       console.log(`[packs] enqueue player=${compactAddress(player.owner)} pack=${packId} name=${player.player_name}`);
 
       // Enqueue transaction
@@ -214,13 +221,13 @@ export class PackDistributionService {
       return false;
     }
 
-    if (!env.TRANSACTION_QUEUE_ENABLED) {
+    if (!env.TRANSACTION_QUEUE_ENABLED && !hybridRewardsConfigured()) {
       console.log(`[packs] skip type=${periodType} reason=queue_disabled`);
       return false;
     }
 
     // Check if required config is available
-    if (!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !hasStarknetTransactionExecutor()) {
+    if ((!env.PROFILE_SYSTEM_CONTRACT_ADDRESS || !hasStarknetTransactionExecutor()) && !hybridRewardsConfigured()) {
       console.log(`[packs] skip type=${periodType} reason=profile_write_unconfigured`);
       return false;
     }
@@ -275,13 +282,15 @@ export class PackDistributionService {
 
         const playerPacks: number[] = [];
 
-        for (const reward of rewards) {
+        for (const [rewardIndex, reward] of rewards.entries()) {
           for (let i = 0; i < reward.quantity; i++) {
-            const txId = await this.distributePackToPlayer(player, reward.packId);
+            const txId = await this.distributePackToPlayer(player, reward.packId,
+              `${periodType}:${periodKey}:${player.position}:${rewardIndex}:${i}`,
+              { period_type: periodType, period_key: periodKey, position: player.position, score: player.player_score });
 
             if (txId) {
               playerPacks.push(reward.packId);
-            }
+            } else if (hybridRewardsConfigured()) throw Error("RANKING_REWARD_DELIVERY_PENDING");
           }
         }
 

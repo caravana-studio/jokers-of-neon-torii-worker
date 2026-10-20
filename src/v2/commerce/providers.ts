@@ -4,6 +4,10 @@ export interface ProviderSnapshot {
   config: { chain_id: string; treasury_address: string; start_block: string; finality: 'finalized' };
   assets: PaymentAsset[];
   cursor: { next_block: string; last_block_hash: string | null; revision: string };
+  recent?: {
+    cursor: { next_block: string | null; last_block_hash: string | null; revision: string };
+    earliest_attempt_at: string | null;
+  };
 }
 export interface Submission { submission_id: string; tx_hash: string; wallet: string; order: {
   order_id: string; delivery_confirmation?: 'receipt' | 'finalized'; quote: Record<string,string>; created_at: string; expires_at: string;
@@ -20,6 +24,7 @@ export interface PaymentAdapter {
   verify(snapshot: ProviderSnapshot, submission: Submission): Promise<Verification>;
   reconcile?(snapshot: ProviderSnapshot, event: Observation): Promise<{ status: 'pending' | 'finalized' | 'review'; code: string | null }>;
   scan(snapshot: ProviderSnapshot): Promise<ScanPage | null>;
+  scanRecent?(snapshot: ProviderSnapshot): Promise<ScanPage | null>;
 }
 export class PaymentAdapters {
   private readonly adapters = new Map<string,PaymentAdapter>();

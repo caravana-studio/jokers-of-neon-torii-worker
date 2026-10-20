@@ -1,3 +1,4 @@
+import { CommercePaymentObserver, StarknetCommerce, type CommerceConfig } from "@jokers-of-neon/pack-domain";
 import { ProviderPaymentObserver } from './commerce/observer.js';
 import { PaymentAdapters } from './commerce/providers.js';
 import { EvmTransferAdapter, paymentRpc } from './commerce/evm.js';
@@ -11,6 +12,7 @@ if (!path && !json) throw new Error("JOKERS_V2_COMMERCE_CONFIG_REQUIRED");
 const c = JSON.parse(json ?? await readFile(path!, "utf8")) as {
   supabaseUrl: string;
   serviceKeyEnv: string;
+  starknet?: CommerceConfig;
   providers?: { providerKey: string; rpcUrl: string }[];
 };
 if (
@@ -33,7 +35,8 @@ if (
   )
 )
   throw new Error("V2_SCHEMA_VERSION_REQUIRED");
-if (c.providers?.length && !release.data.some(r => r.release_key === 'receipt-payment-delivery-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
+if (c.providers?.length && !release.data.some(r => r.release_key === 'recent-payment-discovery-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
+if (c.starknet && !release.data.some(r => r.release_key === 'hybrid-recovery-receipts-v2' && r.protocol_version === 2)) throw Error('V2_SCHEMA_VERSION_REQUIRED');
 const registry = new Map<string, PaymentAdapters>();
 for (const p of c.providers ?? []) {
   if (registry.has(p.providerKey)) throw Error('DUPLICATE_PAYMENT_PROVIDER');
@@ -45,6 +48,7 @@ const fulfill = async () => {
   const count=await worker.replayPending();
   if(count) console.info('V2 commerce fulfilled',{count});
 };
+const starknet = c.starknet ? new CommercePaymentObserver(db, new StarknetCommerce(c.starknet)) : null;
 const observer = new ProviderPaymentObserver(rpc,registry,fulfill);
 if (registry.size) await observer.ready();
 console.info('V2 commerce worker ready', { providers: [...registry.keys()] });
@@ -55,16 +59,29 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   running = false;
 });
-while (running) {
+async function loop(mode: "fast" | "discovery" | "maintenance", interval: number) {
+ while (running) {
   try {
-    const errors = await observer.pollOnce();
+    const errors = await observer.pollOnce(mode);
     for (const error of errors) console.error('V2 payment observation retry',error);
-  } catch { console.error('V2 payment observation unavailable; cursor retained'); }
-  try {
-    const count = await worker.replayPending();
-    if (count) console.info("V2 commerce fulfilled", { count });
-  } catch {
-    console.error("V2 commerce retry; provider evidence retained");
+  } catch { console.error('V2 payment observation unavailable; cursor retained',{mode}); }
+  if (mode === "fast") {
+    try { await fulfill(); } catch { console.error("V2 commerce retry; provider evidence retained"); }
   }
-  if (running) await new Promise((r) => setTimeout(r, 2000));
+  if (running) await new Promise(resolve => setTimeout(resolve, interval));
+ }
 }
+async function starknetLoop(mode: "fast" | "discovery" | "finality") {
+ while (running && starknet) {
+  try {
+    if (mode === "finality") await starknet.reconcileFinality();
+    else {
+      if (mode === "discovery") await starknet.discover(); else await starknet.pollOnce();
+      await fulfill();
+    }
+  } catch { console.error("V2 Starknet payment retry; evidence retained", { mode }); }
+  if (running) await new Promise(resolve => setTimeout(resolve, mode === "finality" ? 30000 : 2000));
+ }
+}
+await Promise.all([loop("fast",2000),loop("discovery",2000),loop("maintenance",30000),
+  starknetLoop("fast"),starknetLoop("discovery"),starknetLoop("finality")]);

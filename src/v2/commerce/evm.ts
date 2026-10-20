@@ -1,5 +1,6 @@
 import { decodeEventLog, parseAbiItem, toHex } from 'viem';
 import type { PaymentAdapter, ProviderSnapshot, Submission, Observation, Verification, ScanPage } from './providers.js';
+import { evmAcceptanceHead } from "../chainEvidence/policy.js";
 export type EvmRpc = (method: string, params: unknown[]) => Promise<any>;
 export function paymentRpc(url: string): EvmRpc {
   const u=new URL(url);
@@ -59,7 +60,7 @@ export class EvmTransferAdapter implements PaymentAdapter {
   async verify(s:ProviderSnapshot,p:Submission):Promise<Verification> {
     if(!hash.test(p.tx_hash)) return review('INVALID_PAYMENT_HASH');
     let head;
-    try { head=await this.head(s,p.order.delivery_confirmation==='receipt'?'latest':'finalized'); } catch(e) { if(e instanceof Error && e.message==='PAYMENT_NOT_FINAL') return pending(e.message); throw e; }
+    try { head=await this.head(s,evmAcceptanceHead(p.order.delivery_confirmation ?? "finalized")); } catch(e) { if(e instanceof Error && e.message==='PAYMENT_NOT_FINAL') return pending(e.message); throw e; }
     const r=await this.receipt(s,p.tx_hash,p.order.delivery_confirmation==='receipt'?undefined:head);
     if(r.pending) return pending(r.pending);
     if(r.invalid) return review(r.invalid);
@@ -95,9 +96,52 @@ export class EvmTransferAdapter implements PaymentAdapter {
       if(previous?.hash?.toLowerCase()!==s.cursor.last_block_hash) throw Error('PAYMENT_FINALIZED_REORG');
     }
     if(from>BigInt(head.number)) return previous ? {from:from.toString(),next:from.toString(),hash:previous.hash.toLowerCase(),coveredThrough:this.blockTime(previous),events:[]} : null;
+    return this.scanRange(s, head, from);
+  }
+  async scanRecent(s: ProviderSnapshot): Promise<ScanPage | null> {
+    if (!s.recent?.earliest_attempt_at) return null;
+    const head = await this.head(s, "latest"), maximum = BigInt(head.number);
+    const minimum = BigInt(s.config.start_block), cursor = s.recent.cursor;
+    let from: bigint;
+    if (cursor.next_block !== null) {
+      const next = BigInt(cursor.next_block);
+      const anchor = next > 0n && next <= maximum + 1n
+        ? await this.rpc("eth_getBlockByNumber", [toHex(next - 1n), false]) : null;
+      if (anchor?.hash?.toLowerCase() === cursor.last_block_hash) {
+        from = next > minimum + 32n ? next - 32n : minimum;
+      } else {
+        // Rewind to the separately verified finalized checkpoint, including
+        // reorgs deeper than our overlap. Never skip an unknown gap.
+        from = BigInt(s.cursor.next_block);
+        if (s.cursor.last_block_hash && from > 0n) {
+          const finalized = await this.rpc("eth_getBlockByNumber", [toHex(from - 1n), false]);
+          if (finalized?.hash?.toLowerCase() !== s.cursor.last_block_hash)
+            throw Error("PAYMENT_FINALIZED_REORG");
+        }
+      }
+    } else {
+      // Locate the first potentially payable block without replaying years of
+      // history. The historical scanner still owns coverage/abandonment.
+      let low = minimum, high = maximum;
+      const since = BigInt(Math.floor(Date.parse(s.recent.earliest_attempt_at) / 1000) - 120);
+      while (low < high) {
+        const mid = (low + high) / 2n;
+        const block = await this.rpc("eth_getBlockByNumber", [toHex(mid), false]);
+        if (!block || !hash.test(block.hash)) throw Error("PAYMENT_BLOCK_INVALID");
+        if (BigInt(block.timestamp) < since) low = mid + 1n; else high = mid;
+      }
+      from = low;
+    }
+    if (from > maximum) return null;
+    return this.scanRange(s, head, from);
+  }
+  private async scanRange(s: ProviderSnapshot, head: any, from: bigint): Promise<ScanPage> {
     let end=from+99n<BigInt(head.number)?from+99n:BigInt(head.number);
     let logs:any[];
+    let before: any;
     for(;;) {
+      before=await this.rpc('eth_getBlockByNumber',[toHex(end),false]);
+      if(!before || !hash.test(before.hash)) throw Error('PAYMENT_BLOCK_INVALID');
       logs=await this.rpc('eth_getLogs',[{fromBlock:toHex(from),toBlock:toHex(end),address:s.assets.map(a=>a.address),
         topics:[transferTopic,null,'0x'+s.config.treasury_address.slice(2).padStart(64,'0')]}]);
       if(logs.length<=1000) break;
@@ -113,6 +157,7 @@ export class EvmTransferAdapter implements PaymentAdapter {
     if(events.length>1000) throw Error('PAYMENT_SCAN_BLOCK_LIMIT');
     const block=await this.rpc('eth_getBlockByNumber',[toHex(end),false]);
     if(!block || !hash.test(block.hash)) throw Error('PAYMENT_BLOCK_INVALID');
+    if(block.hash.toLowerCase()!==before.hash.toLowerCase()) throw Error('PAYMENT_SCAN_REORG');
     return {from:from.toString(),next:(end+1n).toString(),hash:block.hash.toLowerCase(),coveredThrough:this.blockTime(block),events};
   }
 }

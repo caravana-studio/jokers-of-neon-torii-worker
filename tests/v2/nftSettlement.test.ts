@@ -65,14 +65,17 @@ function fixture(
   const db = {
     rpc: async (name: string) => {
       calls.push(name);
-      if (name === "prepare_nft_submission" && failPrepare)
+      if (name === "prepare_leased_nft_submission" && failPrepare)
         return { data: null, error: { message: "DB_UNAVAILABLE" } };
       return {
         data:
-          name === "nft_executor"
+          name === "claim_processing_job" ? { job_id: "job", lease_token: "lease", attempts: 1, target: {} }
+            : name === "prepare_leased_nft_submission" ? submission
+            : name === "pending_nft_finality" ? pending.filter(s => s.status === "confirmed")
+            : name === "nft_executor"
             ? executor
             : name === "pending_nft_submissions"
-              ? pending
+              ? pending.filter(s => s.status !== "confirmed")
               : name === "next_nft_operation"
                 ? next
                 : null,
@@ -90,6 +93,7 @@ function fixture(
     broadcast: mock(async () => {}),
     observe: mock(async () => ({ kind: "missing" })),
     canonicalBlock: mock(async () => null),
+    finalized: mock(async () => false),
     nonceConsumed: mock(async () => false),
   };
   return {
@@ -102,12 +106,12 @@ function fixture(
     },
   };
 }
-it("persists a signed transaction before a later poll can send; a failed commit never broadcasts", async () => {
+it("persists a signed transaction before sending; a failed commit never broadcasts", async () => {
   const f = fixture([], op);
   f.fail();
   await expect(f.worker.pollOnce()).rejects.toThrow("DB_UNAVAILABLE");
   expect(f.adapter.broadcast).not.toHaveBeenCalled();
-  expect(f.calls).toContain("prepare_nft_submission");
+  expect(f.calls).toContain("prepare_leased_nft_submission");
 });
 it("an unavailable canonical block RPC never invents a reorg", async () => {
   const f = fixture([
@@ -120,7 +124,7 @@ it("an unavailable canonical block RPC never invents a reorg", async () => {
   f.adapter.canonicalBlock = mock(async () => {
     throw new Error("RPC_OFFLINE");
   });
-  expect((await f.worker.pollOnce()).errors).toBe(1);
+  expect(await f.worker.reconcileFinality()).toBe(1);
   expect(f.calls).not.toContain("orphan_nft_submission");
   expect(f.calls).not.toContain("quarantine_nft_submission");
   expect(f.adapter.broadcast).not.toHaveBeenCalled();
@@ -181,4 +185,22 @@ it("requires explicit finality, forbids local shortcuts on public RPCs and keeps
       payload: { ...op.payload, card: { ...op.payload.card, quality: 11 } },
     }),
   ).toThrow("INVALID_MINT_CARD");
+});
+
+it("a pending finality check does not occupy the executor nonce or delay the next mint", async () => {
+  const f = fixture([{ ...submission, status: "confirmed", confirmed_block: { number: "10", hash: "0xabc" } }], op);
+  f.adapter.canonicalBlock = mock(async () => "0xabc");
+  await f.worker.reconcileFinality();
+  expect(f.calls).toContain("note_nft_finality");
+  await f.worker.pollOnce();
+  expect(f.adapter.prepare).toHaveBeenCalledTimes(1);
+  expect(f.adapter.broadcast).toHaveBeenCalledTimes(1);
+  expect(f.calls.indexOf("prepare_leased_nft_submission")).toBeLessThan(f.calls.indexOf("note_nft_submitted"));
+});
+it("a null canonical block leaves finality pending without restoring or reminting cards", async () => {
+  const f = fixture([{ ...submission, status: "confirmed", confirmed_block: { number: "10", hash: "0xabc" } }]);
+  await f.worker.reconcileFinality();
+  expect(f.calls).toContain("note_nft_finality");
+  expect(f.calls).not.toContain("orphan_nft_submission");
+  expect(f.adapter.finalized).not.toHaveBeenCalled();
 });

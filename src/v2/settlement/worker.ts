@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { ProcessingJobs, type Lease } from "../processingJobs.js";
 import type {
   Executor,
   NftAdapter,
@@ -7,11 +8,12 @@ import type {
 } from "./types.js";
 /** Every network send uses a signed payload that has already committed to PostgreSQL. */
 export class NftSettlementWorker {
+  private readonly jobs: ProcessingJobs;
   constructor(
     private readonly db: SupabaseClient<any, "api">,
     private readonly executorId: string,
     private readonly adapter: NftAdapter,
-  ) {}
+  ) { this.jobs = new ProcessingJobs((name, args) => this.rpc(name, args)); }
   private async rpc<T>(
     name: string,
     args: Record<string, unknown>,
@@ -26,12 +28,18 @@ export class NftSettlementWorker {
     });
     if (!e) throw new Error("NFT_EXECUTOR_REQUIRED");
     await this.adapter.ready(e);
+    await this.jobs.ready("nft-executor");
   }
   async pollOnce(): Promise<{
     prepared: number;
     confirmed: number;
     errors: number;
   }> {
+    return await this.jobs.run("nft-executor", this.executorId, { executor_id: this.executorId }, async lease => ({
+      result: await this.pollLeased(lease), completed: false,
+    })) ?? { prepared: 0, confirmed: 0, errors: 0 };
+  }
+  private async pollLeased(lease: Lease) {
     const result = { prepared: 0, confirmed: 0, errors: 0 };
     const executor = await this.rpc<Executor>("nft_executor", {
       p_executor_id: this.executorId,
@@ -44,22 +52,9 @@ export class NftSettlementWorker {
       p_executor_id: this.executorId,
     });
     for (const s of pending) {
-      let delay = 5,
+      let delay = 2,
         code: string | null = null;
       try {
-        if (s.confirmed_block) {
-          const actual = await this.adapter.canonicalBlock(
-            s.confirmed_block.number,
-          );
-          if (actual === s.confirmed_block.hash) {
-            delay = 30;
-            continue;
-          }
-          await this.rpc("orphan_nft_submission", {
-            p_submission_id: s.submission_id,
-            p_block_hash: s.confirmed_block.hash,
-          });
-        }
         const seen = await this.adapter.observe(s);
         if (seen.kind === "confirmed") {
           await this.rpc("confirm_nft_submission", {
@@ -116,9 +111,11 @@ export class NftSettlementWorker {
       "next_nft_operation",
       { p_executor_id: this.executorId },
     );
-    if (operation) {
+    if (operation && maySend) {
       const signed = await this.adapter.prepare(operation);
-      await this.rpc("prepare_nft_submission", {
+      const submission = await this.rpc<NftSubmission>("prepare_leased_nft_submission", {
+        p_job: lease.job_id,
+        p_token: lease.lease_token,
         p_executor_id: this.executorId,
         p_operation_id: operation.operation_id,
         p_operation_hash: operation.payload_hash,
@@ -126,8 +123,40 @@ export class NftSettlementWorker {
         p_signed_payload: signed.signed_payload,
         p_tx_hash: signed.tx_hash,
       });
+      // Only send the persisted payload (a competing retry may have won).
+      await this.adapter.broadcast(submission);
+      await this.rpc("note_nft_submitted", { p_submission_id: submission.submission_id });
       result.prepared++;
     }
     return result;
+  }
+  /** Separate budget/cadence: no nonce lease and no work after finalization. */
+  async reconcileFinality(): Promise<number> {
+    const pending = await this.rpc<NftSubmission[]>("pending_nft_finality", { p_executor_id: this.executorId });
+    let errors = 0;
+    for (let offset = 0; offset < pending.length; offset += 4)
+      await Promise.all(pending.slice(offset, offset + 4).map(async s => {
+        if (!s.confirmed_block) return;
+        try {
+          const canonical = await this.adapter.canonicalBlock(s.confirmed_block.number);
+          // null can mean a lagging provider, never proof of a reorg.
+          if (canonical !== null && canonical !== s.confirmed_block.hash) {
+            await this.rpc("orphan_nft_submission", {
+              p_submission_id: s.submission_id, p_block_hash: s.confirmed_block.hash,
+            });
+          } else {
+            await this.rpc("note_nft_finality", {
+              p_submission_id: s.submission_id, p_block_hash: s.confirmed_block.hash,
+              p_finalized: canonical !== null && await this.adapter.finalized(s),
+            });
+          }
+        } catch {
+          errors++;
+          await this.rpc("note_nft_finality", {
+            p_submission_id: s.submission_id, p_block_hash: s.confirmed_block.hash, p_finalized: false,
+          }).catch(() => {});
+        }
+      }));
+    return errors;
   }
 }

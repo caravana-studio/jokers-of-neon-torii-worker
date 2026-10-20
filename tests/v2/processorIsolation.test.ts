@@ -49,7 +49,7 @@ it("a broken pack catalog leaves its opening pending while unrelated archived ga
       return { data, error: null };
     },
   });
-  await expect(worker.replayPending()).rejects.toThrow("INVALID_PACK_CATALOG");
+  await expect(worker.replayPending()).rejects.toThrow("PACK_OPENING_RECOVERY_FAILED");
   expect(calls).toContain("apply_processing_effects");
   expect(calls).toContain("next_gameplay_fact");
   expect(calls).not.toContain("resolve_pack_opening");

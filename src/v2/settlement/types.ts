@@ -10,6 +10,7 @@ export interface NftOperation {
   payload: { protocol: "mint-card-v1"; card: OpenedCard };
   payload_hash: string;
   status: string;
+  acceptance?: "receipt" | "finalized";
 }
 export interface Executor {
   executor_id: string;
@@ -58,6 +59,7 @@ export interface NftAdapter {
   observe(submission: NftSubmission): Promise<Observation>;
   canonicalBlock(number: string): Promise<string | null>;
   nonceConsumed(submission: NftSubmission): Promise<boolean>;
+  finalized(submission: NftSubmission): Promise<boolean>;
 }
 export function operationId(id: string): bigint {
   if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(id))

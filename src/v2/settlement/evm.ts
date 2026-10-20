@@ -1,9 +1,10 @@
+import { evmCard, evmMintHash } from "@jokers-of-neon/pack-domain";
+export { evmCard, evmMintHash } from "@jokers-of-neon/pack-domain";
 import {
   createPublicClient,
   createWalletClient,
   http,
   parseAbi,
-  encodeAbiParameters,
   keccak256,
   toHex,
   decodeEventLog,
@@ -16,6 +17,7 @@ import {
   type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { evmAcceptanceHead } from "../chainEvidence/policy.js";
 import {
   operationId,
   normalizeAddress,
@@ -40,37 +42,6 @@ export const cardsAbi = parseAbi([
   "event RewardMinted(bytes32 indexed operationId,address indexed recipient,uint256 firstTokenId,uint32 count)",
   "event Transfer(address indexed from,address indexed to,uint256 indexed tokenId)",
 ]);
-export const evmCard = (o: NftOperation) => {
-  const c = o.payload.card;
-  return {
-    cardId: c.card_id,
-    rarity: c.rarity,
-    skinId: c.skin_id,
-    skinRarity: c.skin_rarity,
-    quality: c.quality,
-    marketable: c.marketable,
-  };
-};
-export const evmMintHash = (o: NftOperation) =>
-  keccak256(
-    encodeAbiParameters(
-      [
-        { type: "address" },
-        {
-          type: "tuple[]",
-          components: [
-            { name: "cardId", type: "uint32" },
-            { name: "rarity", type: "uint32" },
-            { name: "skinId", type: "uint32" },
-            { name: "skinRarity", type: "uint32" },
-            { name: "quality", type: "uint32" },
-            { name: "marketable", type: "bool" },
-          ],
-        },
-      ],
-      [o.beneficiary as Hex, [evmCard(o)]],
-    ),
-  );
 export class EvmNftAdapter implements NftAdapter {
   private readonly account;
   private readonly client;
@@ -181,6 +152,14 @@ export class EvmNftAdapter implements NftAdapter {
       ) > BigInt(s.nonce)
     );
   }
+  async finalized(s: NftSubmission) {
+    if (!s.confirmed_block) return false;
+    const head = await this.client.getBlock({
+      blockTag: this.executor!.confirmation_policy.finality === "local" ? "latest" : "finalized",
+    });
+    return head.number >= BigInt(s.confirmed_block.number) &&
+      await this.canonicalBlock(s.confirmed_block.number) === s.confirmed_block.hash;
+  }
   async observe(s: NftSubmission): Promise<Observation> {
     await this.signedTransaction(s);
     let receipt;
@@ -195,11 +174,11 @@ export class EvmNftAdapter implements NftAdapter {
     }
     const policy = this.executor!.confirmation_policy,
       head = await this.client.getBlock({
-        blockTag: policy.finality === "local" ? "latest" : "finalized",
+        blockTag: evmAcceptanceHead(s.operation.acceptance ?? "finalized", policy.finality === "local"),
       });
     if (
       head.number < receipt.blockNumber ||
-      head.number - receipt.blockNumber + 1n < BigInt(policy.confirmations)
+      head.number - receipt.blockNumber + 1n < BigInt(s.operation.acceptance === "receipt" ? 1 : policy.confirmations)
     )
       return { kind: "pending" };
     if (

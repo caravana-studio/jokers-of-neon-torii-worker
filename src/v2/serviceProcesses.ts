@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 export function configuredServices(env: NodeJS.ProcessEnv): string[] {
-  const files = ["index"];
+  const files = ["index", "packIndex"];
   if (env.JOKERS_V2_COMMERCE_CONFIG || env.JOKERS_V2_COMMERCE_CONFIG_JSON) files.push("commerceIndex");
   if (env.JOKERS_V2_SETTLEMENT_CONFIG || env.JOKERS_V2_SETTLEMENT_CONFIG_JSON) files.push("settlement/index");
   return files;
