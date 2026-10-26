@@ -14,6 +14,7 @@ import {
   toHex,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { tagCeloCalldata } from '../utils/celoAttribution.js';
 
 const celoProfileAbi = [
   {
@@ -532,6 +533,8 @@ export async function executeCeloQueueTransaction(transaction: QueuedTransaction
       default:
         throw new Error(`Unsupported Celo entrypoint: ${transaction.entrypoint}`);
     }
+
+    data = tagCeloCalldata(data, celoChain.id);
 
     if (transaction.entrypoint === 'transfer') {
       const simulation = await publicClient.call({

@@ -8,6 +8,7 @@
     "build": "tsup",
     "dev": "bun run ./src/index.ts",
     "test": "bun test tests",
+    "verify:celo-attribution": "bun run src/scripts/verifyCeloAttribution.ts",
     "trigger-missions": "bun run ./src/scripts/triggerMissions.ts",
     "stress:queue": "bun run ./src/scripts/stressTransactionQueue.ts",
     "dev:v2": "bun run ./src/v2/index.ts",
@@ -26,6 +27,7 @@
     "dist"
   ],
   "dependencies": {
+    "@celo/attribution-tags": "0.5.0",
     "@dojoengine/core": "1.5.4",
     "@dojoengine/grpc": "1.8.2",
     "@jokers-of-neon/pack-domain": "file:vendor/jokers-of-neon-pack-domain-1.0.0.tgz",
