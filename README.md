@@ -8,6 +8,9 @@ Replaces separate deploys of `jokers-of-neon-torii-worker`, `jokers-of-neon-cron
 
 **Test before prod:** [docs/TEST_CHECKLIST.md](docs/TEST_CHECKLIST.md)
 
+**Celo:** [Attribution tag and verification](docs/CELO_ATTRIBUTION.md) ·
+[Future user-wallet execution proposal](docs/USER_WALLET_EXECUTION_PROPOSAL.md)
+
 ---
 
 # Jokers of Neon - Event Listener

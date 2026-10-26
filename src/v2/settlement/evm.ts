@@ -17,6 +17,7 @@ import {
   type TransactionSerialized,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { tagCeloCalldata } from "../../utils/celoAttribution.js";
 import { evmAcceptanceHead } from "../chainEvidence/policy.js";
 import {
   operationId,
@@ -76,7 +77,7 @@ export class EvmNftAdapter implements NftAdapter {
     const request = await this.wallet.prepareTransactionRequest({
       account: this.account,
       to: o.contract_address as Hex,
-      data: this.mintData(o),
+      data: tagCeloCalldata(this.mintData(o), this.executor.network_id),
       chain: null,
     });
     const raw = await this.wallet.signTransaction({ ...request, chain: null });
@@ -113,7 +114,9 @@ export class EvmNftAdapter implements NftAdapter {
         BigInt(tx.nonce ?? -1) !== BigInt(s.nonce) ||
         (tx.value ?? 0n) !== 0n ||
         normalizeAddress("evm", tx.to ?? "") !== normalizeAddress("evm", s.operation.contract_address) ||
-        tx.data !== this.mintData(s.operation) ||
+        // Stored submissions signed before attribution was introduced must remain replayable.
+        (tx.data !== this.mintData(s.operation) &&
+          tx.data !== tagCeloCalldata(this.mintData(s.operation), this.executor.network_id)) ||
         (await recoverTransactionAddress({ serializedTransaction: raw })).toLowerCase() !== this.account.address.toLowerCase()
       ) throw new Error("SIGNED_PAYLOAD_MISMATCH");
       return raw;
