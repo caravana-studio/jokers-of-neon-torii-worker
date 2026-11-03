@@ -97,6 +97,7 @@ function fixture(
     nonceConsumed: mock(async () => false),
   };
   return {
+    db,
     worker: new NftSettlementWorker(db as any, id, adapter),
     adapter,
     calls,
@@ -203,4 +204,12 @@ it("a null canonical block leaves finality pending without restoring or remintin
   expect(f.calls).toContain("note_nft_finality");
   expect(f.calls).not.toContain("orphan_nft_submission");
   expect(f.adapter.finalized).not.toHaveBeenCalled();
+});
+it("a Profile failure does not fail the NFT job or repeat its successful send", async () => {
+  const f = fixture([], op);
+  const profile = { ready: mock(async () => {}), pollLeased: mock(async () => { throw Error("PROFILE_RPC_OFFLINE"); }) };
+  const worker = new NftSettlementWorker(f.db as any, id, f.adapter, profile as any);
+  expect(await worker.pollOnce()).toEqual({ prepared: 1, confirmed: 0, errors: 1 });
+  expect(f.adapter.broadcast).toHaveBeenCalledTimes(1);
+  expect(profile.pollLeased.mock.calls[0][2]).toBe(false);
 });

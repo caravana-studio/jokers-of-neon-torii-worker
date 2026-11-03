@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { ProcessingJobs, type Lease } from "../processingJobs.js";
+import type { ProfileMirror } from "./profileMirror.js";
 import type {
   Executor,
   NftAdapter,
@@ -13,6 +14,7 @@ export class NftSettlementWorker {
     private readonly db: SupabaseClient<any, "api">,
     private readonly executorId: string,
     private readonly adapter: NftAdapter,
+    private readonly profileMirror?: ProfileMirror,
   ) { this.jobs = new ProcessingJobs((name, args) => this.rpc(name, args)); }
   private async rpc<T>(
     name: string,
@@ -28,6 +30,7 @@ export class NftSettlementWorker {
     });
     if (!e) throw new Error("NFT_EXECUTOR_REQUIRED");
     await this.adapter.ready(e);
+    await this.profileMirror?.ready(e);
     await this.jobs.ready("nft-executor");
   }
   async pollOnce(): Promise<{
@@ -128,6 +131,19 @@ export class NftSettlementWorker {
       await this.rpc("note_nft_submitted", { p_submission_id: submission.submission_id });
       result.prepared++;
     }
+    if (this.profileMirror) {
+      try {
+        const profile = await this.profileMirror.pollLeased(lease, executor, !operation);
+        result.prepared += profile.prepared;
+        result.confirmed += profile.confirmed;
+        result.errors += profile.errors;
+      } catch {
+        // Profile RPC outages or a bad snapshot must not kill the NFT processing job.
+        // Persisted submissions still occupy the shared nonce lane until reconciled.
+        result.errors++;
+        console.error("V2 Profile mirror retry; persisted transactions preserved", { executorId: this.executorId });
+      }
+    }
     return result;
   }
   /** Separate budget/cadence: no nonce lease and no work after finalization. */
@@ -157,6 +173,6 @@ export class NftSettlementWorker {
           }).catch(() => {});
         }
       }));
-    return errors;
+    return errors + (await this.profileMirror?.reconcileFinality() ?? 0);
   }
 }

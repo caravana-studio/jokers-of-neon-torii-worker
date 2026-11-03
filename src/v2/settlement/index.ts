@@ -4,6 +4,7 @@ import { StarknetNftAdapter } from "./starknet.js";
 import { NftSettlementWorker } from "./worker.js";
 import type { Executor } from "./types.js";
 import { readSettlementConfig } from "./config.js";
+import { ProfileMirror } from "./profileMirror.js";
 const config = await readSettlementConfig();
 const env = (name: string) => {
   if (!/^[A-Z][A-Z0-9_]*$/.test(name) || !process.env[name])
@@ -49,7 +50,10 @@ for (const c of config.executors) {
         ? new StarknetNftAdapter(c.rpcUrl, e.address, key)
         : null;
   if (!adapter) throw new Error("UNSUPPORTED_SETTLEMENT_ADAPTER");
-  const worker = new NftSettlementWorker(db, c.executorId, adapter);
+  if (c.profileMirror && e.adapter_key !== "evm") throw new Error("PROFILE_REQUIRES_EVM");
+  // Disabled configuration does not load the publisher, sign, reserve nonces or call Profile RPCs.
+  const profile = c.profileMirror?.enabled === true ? new ProfileMirror(db, c.executorId, c.rpcUrl, key as `0x${string}`, c.profileMirror) : undefined;
+  const worker = new NftSettlementWorker(db, c.executorId, adapter, profile);
   await worker.ready();
   workers.push({ id: c.executorId, worker });
 }
@@ -62,6 +66,7 @@ process.on("SIGTERM", () => {
 });
 console.info("V2 NFT settlement ready", {
   executors: workers.map((w) => w.id),
+  profileMirrors: config.executors.filter(e => e.profileMirror).map(e => ({ executorId: e.executorId, contract: e.profileMirror!.contractAddress, enabled: e.profileMirror!.enabled === true })),
 });
 async function sends() {
  while (running) {

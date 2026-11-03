@@ -1,0 +1,15 @@
+[
+  {
+    "executorId": "b1cd4451-02e4-461b-bfbb-02405bb48220",
+    "enabled": false,
+    "contractAddress": "0x0BEC4a42013165956949a26ea82c4366135bd297",
+    "runtimes": [
+      {
+        "runtimeId": "6e354b40-2670-4abe-89bb-cbfd8c533d7d",
+        "rpcUrl": "https://katana.testnet.jokersofneon.com",
+        "gameSystemAddress": "0x3e21b3e65a4b6fd5ce4e663fd2883f1ea56bdad07076ac1b83d9e1ab56eabaa",
+        "gameViewsAddress": "0x6499817d108450b206b14ee399f4d4d4736f6d0a2194dd106377e8772470c83"
+      }
+    ]
+  }
+]
