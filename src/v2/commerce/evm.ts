@@ -1,6 +1,7 @@
 import { decodeEventLog, parseAbiItem, toHex } from 'viem';
-import type { PaymentAdapter, ProviderSnapshot, Submission, Observation, Verification, ScanPage } from './providers.js';
+import type { PaymentAdapter, PaymentAsset, ProviderSnapshot, Submission, Observation, Verification, ScanPage } from './providers.js';
 import { evmAcceptanceHead } from "../chainEvidence/policy.js";
+import { CachedValidation } from "../chainEvidence/cachedValidation.js";
 export type EvmRpc = (method: string, params: unknown[]) => Promise<any>;
 export function paymentRpc(url: string): EvmRpc {
   const u=new URL(url);
@@ -20,17 +21,25 @@ const pending=(code:string):Verification=>({status:'pending',code,events:[]});
 const review=(code:string):Verification=>({status:'review',code,events:[]});
 export class EvmTransferAdapter implements PaymentAdapter {
   readonly kind='evm_erc20_transfer';
+  private readonly chainValidation = new CachedValidation();
+  private readonly assetValidation = new CachedValidation();
   constructor(private readonly rpc:EvmRpc) {}
+  private async validateDecimals(assets: PaymentAsset[], block: string) {
+    for (const asset of assets) {
+      const decimals = await this.rpc('eth_call', [{ to: asset.address, data: '0x313ce567' }, block]);
+      if (BigInt(decimals) !== BigInt(asset.decimals)) throw Error('PAYMENT_TOKEN_DECIMALS_MISMATCH');
+    }
+  }
   private async head(s:ProviderSnapshot,tag: 'latest' | 'finalized' = 'finalized') {
     if(s.config.finality!=='finalized' || !/^[1-9][0-9]*$/.test(s.config.chain_id) || !address.test(s.config.treasury_address) || !s.assets?.length ||
       s.assets.some(a=>!address.test(a.address)||!Number.isInteger(a.decimals)||a.decimals<6||a.decimals>36)) throw Error('PAYMENT_CONFIGURATION_INVALID');
-    if(BigInt(await this.rpc('eth_chainId',[]))!==BigInt(s.config.chain_id)) throw Error('PAYMENT_CHAIN_MISMATCH');
+    await this.chainValidation.check(s.config.chain_id, async () => {
+      if(BigInt(await this.rpc('eth_chainId',[]))!==BigInt(s.config.chain_id)) throw Error('PAYMENT_CHAIN_MISMATCH');
+    });
     const b=await this.rpc('eth_getBlockByNumber',[tag,false]);
     if(!b || !hash.test(b.hash) || b.number==null) throw Error(tag==='finalized'?'PAYMENT_NOT_FINAL':'PAYMENT_HEAD_UNAVAILABLE');
-    for(const asset of s.assets) {
-      const decimals=await this.rpc('eth_call',[{to:asset.address,data:'0x313ce567'},b.number]);
-      if(BigInt(decimals)!==BigInt(asset.decimals)) throw Error('PAYMENT_TOKEN_DECIMALS_MISMATCH');
-    }
+    const assetKey = JSON.stringify([s.config.chain_id, s.assets.map(a => [a.address, a.decimals]).sort()]);
+    await this.assetValidation.check(assetKey, () => this.validateDecimals(s.assets, b.number));
     return b;
   }
   private async receipt(s:ProviderSnapshot,tx:string,head?:{number:string}):Promise<{pending?:string; invalid?:string; events:Observation[]}> {
@@ -54,6 +63,15 @@ export class EvmTransferAdapter implements PaymentAdapter {
       events.push({network_id:s.config.chain_id,tx_hash:tx.toLowerCase(),log_index:Number(index),token_address:log.address.toLowerCase(),
         sender:decoded.args.from.toLowerCase(),recipient:decoded.args.to.toLowerCase(),amount_atomic:decoded.args.value.toString(),
         block_number:BigInt(r.blockNumber).toString(),block_hash:b.hash.toLowerCase(),paid_at:new Date(Number(timestamp)*1000).toISOString()});
+    }
+    if (events.length) {
+      // A warm configuration cache must never substitute for monetary evidence.
+      // Revalidate only the transferred tokens at the receipt block, then check
+      // that a reorg did not replace that block while the calls were in flight.
+      const tokens = new Set(events.map(e => e.token_address));
+      await this.validateDecimals(s.assets.filter(a => tokens.has(a.address)), r.blockNumber);
+      const canonical = await this.rpc('eth_getBlockByNumber', [r.blockNumber, false]);
+      if (canonical?.hash?.toLowerCase() !== b.hash.toLowerCase()) return {pending:'PAYMENT_REORG_PENDING',events:[]};
     }
     return {events};
   }

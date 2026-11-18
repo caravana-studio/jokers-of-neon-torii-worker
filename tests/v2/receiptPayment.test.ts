@@ -17,7 +17,8 @@ const submission: Submission = {
     quote: { token_address: token, treasury_address: treasury } },
 };
 function fixture() {
-  let final = 4, missing = false, chain = 11142220, canonical = hash(5), finalRpcDown = false;
+  let final = 4, missing = false, chain = 11142220, canonical = hash(5), finalRpcDown = false, decimals = 6, reorgOnDecimals = false;
+  const calls: { method: string; args: any[] }[] = [];
   const timestamp = toHex(Math.floor(Date.now() / 1000) - 1);
   const receipt = { status: '0x1', transactionHash: hash(100), blockNumber: '0x5', blockHash: hash(5), logs: [{
     address: token, transactionHash: hash(100), blockNumber: '0x5', blockHash: hash(5), logIndex: '0x0', removed: false,
@@ -26,8 +27,12 @@ function fixture() {
     data: encodeAbiParameters([{ type: 'uint256' }], [5000000n]),
   }] };
   const adapter = new EvmTransferAdapter(async (method, args: any[]) => {
+    calls.push({ method, args });
     if (method === 'eth_chainId') return toHex(chain);
-    if (method === 'eth_call') return '0x6';
+    if (method === 'eth_call') {
+      if (reorgOnDecimals) canonical = hash(999);
+      return toHex(decimals);
+    }
     if (method === 'eth_getTransactionReceipt') return missing ? null : receipt;
     if (method === 'eth_getBlockByNumber') {
       if (args[0] === 'finalized' && finalRpcDown) throw Error('PAYMENT_RPC_UNAVAILABLE');
@@ -38,7 +43,8 @@ function fixture() {
     throw Error('UNEXPECTED_RPC');
   });
   return { adapter, receipt, setFinal: (n: number) => { final = n; }, setMissing: (v: boolean) => { missing = v; },
-    setChain: (n: number) => { chain = n; }, reorg: () => { canonical = hash(999); }, failFinalRpc: () => { finalRpcDown = true; } };
+    setChain: (n: number) => { chain = n; }, reorg: () => { canonical = hash(999); }, failFinalRpc: () => { finalRpcDown = true; },
+    calls, setDecimals: (n: number) => { decimals = n; }, reorgDuringDecimals: () => { reorgOnDecimals = true; } };
 }
 test('successful canonical receipt is verified without consulting finalized; legacy policy still waits', async () => {
   const f = fixture();
@@ -59,8 +65,26 @@ test('hash alone, failed execution, wrong token/parties, wrong network and nonca
     const original = structuredClone(f.receipt.logs[0]); alter();
     expect((await f.adapter.verify(snapshot, submission)).status).toBe('review'); f.receipt.logs[0] = original;
   }
-  f.setChain(42220); await expect(f.adapter.verify(snapshot, submission)).rejects.toThrow('PAYMENT_CHAIN_MISMATCH'); f.setChain(11142220);
+  const wrongEndpoint = fixture(); wrongEndpoint.setChain(42220);
+  await expect(wrongEndpoint.adapter.verify(snapshot, submission)).rejects.toThrow('PAYMENT_CHAIN_MISMATCH');
   f.reorg(); expect((await f.adapter.verify(snapshot, submission)).code).toBe('PAYMENT_REORG_PENDING');
+});
+test('warm metadata cannot accept a payment or finalize evidence with changed token decimals', async () => {
+  const f = fixture(), event = (await f.adapter.verify(snapshot, submission)).events[0];
+  f.calls.length = 0;
+  await f.adapter.verify(snapshot, submission);
+  expect(f.calls.filter(c => c.method === 'eth_call').map(c => c.args)).toEqual([[{ to: token, data: '0x313ce567' }, '0x5']]);
+  f.setDecimals(18);
+  await expect(f.adapter.verify(snapshot, submission)).rejects.toThrow('PAYMENT_TOKEN_DECIMALS_MISMATCH');
+  await expect(f.adapter.reconcile(snapshot, event)).rejects.toThrow('PAYMENT_TOKEN_DECIMALS_MISMATCH');
+  f.setDecimals(6);
+  expect((await f.adapter.verify(snapshot, submission)).status).toBe('verified');
+});
+test('a reorg during token validation cannot certify payment evidence', async () => {
+  const f = fixture();
+  await f.adapter.verify(snapshot, submission);
+  f.reorgDuringDecimals();
+  expect((await f.adapter.verify(snapshot, submission)).code).toBe('PAYMENT_REORG_PENDING');
 });
 test('reconciliation detects changed evidence, waits through missing receipts, and closes on finality', async () => {
   const f = fixture(), event = (await f.adapter.verify(snapshot, submission)).events[0];

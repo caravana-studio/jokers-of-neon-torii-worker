@@ -19,6 +19,7 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { tagCeloCalldata } from "../../utils/celoAttribution.js";
 import { evmAcceptanceHead } from "../chainEvidence/policy.js";
+import { CachedValidation } from "../chainEvidence/cachedValidation.js";
 import {
   operationId,
   normalizeAddress,
@@ -48,6 +49,7 @@ export class EvmNftAdapter implements NftAdapter {
   private readonly client;
   private readonly wallet;
   private executor?: Executor;
+  private readonly chainValidation = new CachedValidation();
   constructor(
     private readonly rpcUrl: string,
     privateKey: Hex,
@@ -64,10 +66,13 @@ export class EvmNftAdapter implements NftAdapter {
     if (
       e.adapter_key !== "evm" ||
       normalizeAddress("evm", e.address) !==
-        this.account.address.toLowerCase() ||
-      BigInt(e.network_id) !== BigInt(await this.client.getChainId())
+        this.account.address.toLowerCase()
     )
       throw new Error("SETTLEMENT_EXECUTOR_MISMATCH");
+    await this.chainValidation.check(e.network_id, async () => {
+      if (BigInt(e.network_id) !== BigInt(await this.client.getChainId()))
+        throw new Error("SETTLEMENT_EXECUTOR_MISMATCH");
+    });
     this.executor = e;
   }
   async prepare(o: NftOperation): Promise<SignedMint> {

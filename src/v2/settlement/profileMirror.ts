@@ -6,6 +6,7 @@ import { tagCeloCalldata } from "../../utils/celoAttribution.js";
 import type { Lease } from "../processingJobs.js";
 import { profileAbi, profileCalldata, profileSnapshot, type ProfileGameSource, type ProfilePayload } from "./profileProtocol.js";
 import { validatePolicy, type Executor } from "./types.js";
+import { CachedValidation } from "../chainEvidence/cachedValidation.js";
 
 export interface ProfileMirrorConfig {
   /** Must be explicitly true, in addition to the database switch, before any broadcast. */
@@ -30,6 +31,7 @@ export class ProfileMirror {
   private executor?: Executor;
   private nextCaptureAt = 0;
   private enabled = false;
+  private readonly chainValidation = new CachedValidation();
   constructor(private readonly db: SupabaseClient<any, "api">, private readonly executorId: string,
     private readonly rpcUrl: string, key: Hex, private readonly config: ProfileMirrorConfig) {
     this.account = privateKeyToAccount(key);
@@ -43,16 +45,24 @@ export class ProfileMirror {
     return data as T;
   }
   async ready(e: Executor) {
+    await this.refreshExecutor(e);
+    await this.assertOwner();
+  }
+  private async refreshExecutor(e: Executor) {
     validatePolicy(e, this.rpcUrl);
     const target = await this.rpc<{ contract_address: string; chain_key: string; enabled: boolean } | null>("profile_mirror_target", { p_executor_id: this.executorId });
     if (!target || target.contract_address.toLowerCase() !== this.config.contractAddress.toLowerCase() || target.chain_key !== e.chain_key ||
       e.adapter_key !== "evm" || e.executor_id !== this.executorId || e.address.toLowerCase() !== this.account.address.toLowerCase())
       throw new Error("PROFILE_EXECUTOR_MISMATCH");
-    if (await this.client.getChainId() !== Number(e.network_id)) throw new Error("PROFILE_CHAIN_MISMATCH");
-    const owner = await this.client.readContract({ address: this.config.contractAddress, abi: profileAbi, functionName: "owner" });
-    if (owner.toLowerCase() !== this.account.address.toLowerCase()) throw new Error("PROFILE_OWNER_MISMATCH");
+    await this.chainValidation.check(e.network_id, async () => {
+      if (BigInt(await this.client.getChainId()) !== BigInt(e.network_id)) throw new Error("PROFILE_CHAIN_MISMATCH");
+    });
     this.executor = e;
     this.enabled = this.config.enabled === true && target.enabled === true;
+  }
+  private async assertOwner() {
+    const owner = await this.client.readContract({ address: this.config.contractAddress, abi: profileAbi, functionName: "owner" });
+    if (owner.toLowerCase() !== this.account.address.toLowerCase()) throw new Error("PROFILE_OWNER_MISMATCH");
   }
   private data(o: Operation): Hex {
     if (!this.executor || o.chain_key !== this.executor.chain_key || o.contract_address.toLowerCase() !== this.config.contractAddress.toLowerCase())
@@ -70,11 +80,14 @@ export class ProfileMirror {
     return raw;
   }
   private async send(s: Submission) {
+    if (this.config.enabled !== true) return false;
+    const raw = await this.raw(s);
+    await this.assertOwner();
     // Re-read immediately before a send, including retries of previously signed bytes.
     // A disabled mirror must not rebroadcast a transaction prepared before the pause.
     const target = await this.rpc<{ enabled: boolean } | null>("profile_mirror_target", { p_executor_id: this.executorId });
-    if (this.config.enabled !== true || target?.enabled !== true) return false;
-    const hash = await this.client.sendRawTransaction({ serializedTransaction: await this.raw(s) });
+    if (target?.enabled !== true) return false;
+    const hash = await this.client.sendRawTransaction({ serializedTransaction: raw });
     if (hash !== s.tx_hash) throw new Error("PROFILE_TRANSACTION_HASH_MISMATCH");
     await this.note(s, "submitted");
     return true;
@@ -148,7 +161,7 @@ export class ProfileMirror {
   }
   async pollLeased(lease: Lease, e: Executor, allowPrepare = true) {
     const result = { prepared: 0, confirmed: 0, errors: 0 };
-    await this.ready(e);
+    await this.refreshExecutor(e);
     if (this.enabled && Date.now() >= this.nextCaptureAt) {
       this.nextCaptureAt = Date.now() + 30000;
       result.errors += await this.capture();
@@ -164,6 +177,8 @@ export class ProfileMirror {
     if (!this.enabled || !allowPrepare || e.status !== "ready" || e.chain_status !== "enabled") return result;
     const operation = await this.rpc<Operation | null>("next_profile_operation", { p_executor_id: this.executorId });
     if (!operation) return result;
+    // Ownership is live authorization: check only when there is work, never cache it.
+    await this.assertOwner();
     const request = await this.wallet.prepareTransactionRequest({ account: this.account, to: operation.contract_address, data: this.data(operation), chain: null });
     const raw = await this.wallet.signTransaction({ ...request, chain: null });
     const persisted = await this.rpc<Submission>("prepare_profile_submission", {
